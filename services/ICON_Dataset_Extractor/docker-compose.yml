@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: icon_extractor
+    volumes:
+      - ./shared:/data:rw        # Inputdaten
+      - ./exports:/app/exports:rw  # Output
+      - ./config.txt:/app/config.txt:ro  # Konfiguration
+    environment:
+      - CONFIG_PATH=/app/config.txt
+      - DATA_DIR=/data
+      - EXPORT_DIR=/app/exports
+    command: ["python", "ICON_Dataset_Extractor.py"]
+    restart: no

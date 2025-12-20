@@ -1,0 +1,8 @@
+# .dockerignore
+shared/
+exports/
+__pycache__/
+*.pyc
+*.log
+*.tmp
+*.nc

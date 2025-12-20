@@ -1,0 +1,39 @@
+[location]
+lat = 48.547
+lon = 11.274
+
+[inverter]
+dc_max = 9000
+eta_max = 0.98
+altitude = 435
+
+[site1]
+tilt = 48
+azimuth = 265
+gamma_pdc = -0.0035
+quantity = 8
+
+
+[site2]
+tilt = 48
+azimuth = 85
+gamma_pdc = -0.0035
+quantity = 10
+
+
+[site3]
+tilt = 9
+azimuth = 175
+gamma_pdc = -0.0035
+quantity = 6
+
+
+
+[moduletype]
+v_mp = 30.5
+i_mp = 8.7
+v_oc = 38.0
+i_sc = 9.2
+alpha_sc = 0.0045
+beta_voc = -0.0032
+gamma_pdc = -0.0035

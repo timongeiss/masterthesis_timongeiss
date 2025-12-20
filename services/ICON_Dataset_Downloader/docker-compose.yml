@@ -1,0 +1,30 @@
+version: "3.9"
+services:
+  downloader:
+    image: deutscherwetterdienst/downloader
+    volumes:
+      - ./shared:/data
+    environment:
+      - TIMESTAMP1=${TIMESTAMP1}
+      - TIMESTAMP2=${TIMESTAMP2}
+      - TIMESTAMP3=${TIMESTAMP3}
+      - TIMESTAMP4=${TIMESTAMP4}
+    entrypoint: /bin/sh
+    command: >
+      -c "
+        echo '▶ Lauf 1: ${TIMESTAMP1}';
+        downloader --model icon-d2 --grid regular-lat-lon --single-level-fields aswdir_s,t_2m,aswdifd_s --min-time-step 0 --max-time-step 48 --timestamp ${TIMESTAMP1} --directory /data;
+        echo '✅ Fertig: ${TIMESTAMP1}';
+
+        echo '▶ Lauf 2: ${TIMESTAMP2}';
+        downloader --model icon-d2 --grid regular-lat-lon --single-level-fields aswdir_s,t_2m,aswdifd_s --min-time-step 0 --max-time-step 48 --timestamp ${TIMESTAMP2} --directory /data;
+        echo '✅ Fertig: ${TIMESTAMP2}';
+
+        echo '▶ Lauf 3: ${TIMESTAMP3}';
+        downloader --model icon-d2 --grid regular-lat-lon --single-level-fields aswdir_s,t_2m,aswdifd_s --min-time-step 0 --max-time-step 48 --timestamp ${TIMESTAMP3} --directory /data;
+        echo '✅ Fertig: ${TIMESTAMP3}';
+
+        echo '▶ Lauf 4: ${TIMESTAMP4}';
+        downloader --model icon-d2 --grid regular-lat-lon --single-level-fields aswdir_s,t_2m,aswdifd_s --min-time-step 0 --max-time-step 48 --timestamp ${TIMESTAMP4} --directory /data;
+        echo '✅ Fertig: ${TIMESTAMP4}';
+      "
