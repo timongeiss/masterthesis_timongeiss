@@ -1,0 +1,12 @@
+feature_cols:
+  - lead_time_hours
+  - solar_elevation_deg
+  - ASWDIR_S
+  - ASWDIFD_S
+  - T_2M
+target_col: power_ac
+meta_features:
+  - estimated_dc_capacity
+  - tilt
+  - azimuth
+meta_dim: 5

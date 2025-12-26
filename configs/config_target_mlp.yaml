@@ -1,0 +1,12 @@
+feature_cols:
+  - lead_time_hours
+  - solar_elevation_deg
+  - aswdir_s_norm
+  - aswdifd_s_norm
+  - t2m_norm
+target_col: power_norm
+meta_features:
+  - dc_capacity_kwp
+  - tilt_norm
+  - azimuth_norm
+meta_dim: 5

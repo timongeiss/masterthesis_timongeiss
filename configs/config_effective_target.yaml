@@ -1,0 +1,26 @@
+arrays:
+- name: West
+  azimuth_deg: 265.0
+  tilt_deg: 48.0
+  p_kwp: 3.24
+- name: East
+  azimuth_deg: 85.0
+  tilt_deg: 48.0
+  p_kwp: 4.05
+- name: South
+  azimuth_deg: 175.0
+  tilt_deg: 9.0
+  p_kwp: 2.43
+capacity_vector:
+  x: 0.632787731034816
+  y: 0.32622605397352433
+  z: 7.278044788002261
+effective:
+  n_eff:
+    x: 0.08653173803285431
+    y: 0.04461038995772761
+    z: 0.9952498035271511
+  P_equiv_kwp: 7.312781938975496
+  A_eff_deg: 117.27282063405448
+  T_eff_deg: 5.586830326460631
+P_installed_kwp: 9.72

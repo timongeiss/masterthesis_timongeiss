@@ -38,7 +38,7 @@ def is_missing(value: str) -> Tuple[bool, str]:
 
 
 BASE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BASE_DIR.parents[1]
+PROJECT_ROOT = BASE_DIR.parents[2]
 DEFAULT_DIR = PROJECT_ROOT / "data" / "processed" / "physical_input"
 
 

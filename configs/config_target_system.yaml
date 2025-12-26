@@ -1,0 +1,5 @@
+# Target-System Parameter
+DC_CAPACITY_KWP: 9.72
+TILT_DEG: 5.59
+AZIMUTH_DEG: 117.27
+DC_EFF_PER_KWP: 0.75

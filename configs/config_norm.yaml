@@ -1,0 +1,5 @@
+# Normalisierungs-Parameter
+ASWDIR_NORM: 1000.0
+ASWDIF_NORM: 1000.0
+T2M_LOWER_NORM: 10.0
+T2M_RANGE: 50.0
