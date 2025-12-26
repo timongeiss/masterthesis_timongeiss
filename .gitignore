@@ -1,0 +1,12 @@
+.grb
+.GRIB2
+.bz2
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+.ipynb_checkpoints/
+.vscode/
