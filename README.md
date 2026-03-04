@@ -1,12 +1,12 @@
-# Project Description
+# Description
 
 Abstract.
 
-# Project Documentation
+# Documentation
 
 This section provides an overview of the software provided. For detailed information on how it works and references for the methodological choices made in implementing the algorithms described here, please refer to the thesis.
 
-Detailed graphical documentation of the process flows can be viewed at x:
+Detailed graphical documentation of the process flows can be viewed at:
 
 https://miro.com/app/board/uXjVGadA7lw=/?share_link_id=890883813480
 
