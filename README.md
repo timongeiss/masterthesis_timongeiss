@@ -11,7 +11,7 @@ Detailed graphical documentation of the process flows can be viewed at:
 https://miro.com/app/board/uXjVGadA7lw=/?share_link_id=890883813480
 
 The code and the documentation is structured as follows:
-- *Data sources*: Origin of the used Datasets (shown as flat cylinders).
+- Data sources: Origin of the used Datasets (shown as flat cylinders).
 - data: contains all documents and databases (csv in green, grib2 in orange, pt in
 red) in different sub-folders for processing steps (sub-folders shown with green
 background boxes).
