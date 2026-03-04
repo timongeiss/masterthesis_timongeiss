@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+authors:
+  - family-names: "Geiss"
+    given-names: "Timon"
+    affiliation: "Student at TU Wien"
+  - family-names: "Houben"
+    given-names: "Nikolaus"
+    affiliation: "TU Wien, Institute of Energy Systems and Electrical Drives"
+    orcid: "https://orcid.org/0000-0001-7355-9815"
+title: "Economic and Error Metric Evaluation of an NWP-based hybrid Transfer Learning Photovoltaic Forecasting Model"
+type: thesis
+thesis-type: "Master's Thesis"
+year: 2026
+month: 8
+institution:
+  name: "TU Wien"
+  address: "Karlsplatz 13, 1040 Wien"
+  country: AT
+url: "https://github.com/timongeiss/masterthesis_timongeiss"
