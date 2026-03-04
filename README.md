@@ -4,7 +4,7 @@ Abstract.
 
 # Documentation
 
-This section provides an overview of the software provided. For detailed information on how it works and references for the methodological choices made in implementing the algorithms described here, please refer to the thesis.
+This section provides an overview of the software provided. For detailed information on how it works and references for the methodological choices made in implementing the algorithms in this project, please refer to the thesis.
 
 Detailed graphical documentation of the process flows can be viewed at:
 
