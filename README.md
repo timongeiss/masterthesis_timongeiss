@@ -1,0 +1,26 @@
+# Project Description
+
+Abstract.
+
+# Project Documentation
+
+This section provides an overview of the software provided. For detailed information on how it works and references for the methodological choices made in implementing the algorithms described here, please refer to the thesis.
+
+Detailed graphical documentation of the process flows can be viewed at x:
+
+https://miro.com/app/board/uXjVGadA7lw=/?share_link_id=890883813480
+
+The code and the documentation is structured as follows:
+- Data sources: Origin of the used Datasets (shown as flat cylinders).
+- data: contains all documents and databases (csv in green, grib2 in orange, pt in
+red) in different sub-folders for processing steps (sub-folders shown with green
+background boxes).
+- services: Created docker services that ran independently for several months in
+preparation for data collection on a workstation (purple box).
+- src: Source code with all Python scripts (blue), organized in sub-folders (shown
+as gray boxes)
+- configs: Collection of all config files (YAML and txt in pink) for parameterizing
+the Python scripts (shown as pink box)
+- reports: Graphic outputs as png (shown in yellow boxes)
+Solid lines with arrows represent automatic process flows. Dotted lines indicate manual
+file transfers.
