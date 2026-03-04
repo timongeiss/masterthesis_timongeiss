@@ -40,7 +40,7 @@ cfg_mlp = mlp.load_mlp_config(CONFIG_TARGET_MLP)
 
 # mischung aus source und target mlp configs!
 BATCH_SIZE = 16 # klein weil target data
-EPOCHS = 513    # testen!
+EPOCHS = 1000    # testen!
 LEARNING_RATE = 0.0001 # wie bei target mlp, da target data
 HIDDEN_SIZES = [256, 256, 128, 128, 64, 64] # struktur des source mlp
 TRANSFER_HIDDEN_SIZE = 64   # größe der neuen transfer schicht
