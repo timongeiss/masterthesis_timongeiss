@@ -98,7 +98,6 @@ def run_grid_search(mode: str) -> None:
                 batch_size=bs,
                 patience=cfg["patience"],
                 loaders=loaders,
-                save_predictions=False,
             )
             
         else:

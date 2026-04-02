@@ -1,7 +1,8 @@
-"""Generates three different plot types, in total five png"""
+"""Generates overall metric plots and saves them as png files."""
 
 from pathlib import Path
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -114,6 +115,7 @@ def plot_metric(metric: str, data: dict, save_path: Path) -> None:
 
     ax.set_ylabel(metric)
     ax.set_xlabel("Testday number")
+    ax.set_ylim(0.0, 0.3)
     num_days = len(ordered_dates)
     ax.set_xticks(range(1, num_days + 1))
     ax.set_xticklabels([original_day_num[d] for d in ordered_dates])
@@ -167,28 +169,243 @@ def plot_differences_single_model(model_csv: str, data: dict, save_path: Path) -
     plt.close(fig)
 
 
-def plot_boxplots(ax, metric: str, data: dict) -> None:
-    
-    labels = []
-    box_data = []
-    colors = []
+def plot_metric_over_time_all_models(metric: str, data: dict, save_path: Path) -> None:
+    """Plot one metric over all test days with one subplot per model."""
 
-    for csv_name, _, _ in MODELS:
+    ordered_model_csvs = [
+        "physical_model_testday_metrics.csv",
+        "source_model_testday_metrics.csv",
+        "target_model_testday_metrics.csv",
+        "transfer_model_testday_metrics.csv",
+    ]
+    model_order = [csv_name for csv_name in ordered_model_csvs if csv_name in data]
+
+    n_models = len(model_order)
+    fig, axes = plt.subplots(n_models, 1, figsize=(14, 12), sharex=True, sharey=True)
+    axes_flat = np.atleast_1d(axes)
+
+    highlight_models = {
+        "target_model_testday_metrics.csv",
+        "transfer_model_testday_metrics.csv",
+    }
+
+    y_min, y_max = 0.0, 0.3
+
+    def plot_segment_mean(
+        ax,
+        x_seg: np.ndarray,
+        y_seg: np.ndarray,
+        color: str,
+        linestyle: str,
+        label_x: float,
+        label_ha: str,
+    ) -> None:
+        valid = np.isfinite(y_seg)
+        if valid.sum() == 0:
+            return
+        mean_val = float(np.nanmean(y_seg[valid]))
+        ax.hlines(
+            y=mean_val,
+            xmin=float(x_seg[0]),
+            xmax=float(x_seg[-1]),
+            color=color,
+            linestyle=linestyle,
+            linewidth=1.4,
+            alpha=0.95,
+        )
+        if mean_val > y_max - 0.02:
+            y_label = mean_val - 0.006
+            va = "top"
+        else:
+            y_label = mean_val + 0.006
+            va = "bottom"
+        ax.text(
+            label_x,
+            y_label,
+            f"{mean_val:.3f}",
+            ha=label_ha,
+            va=va,
+            fontsize=7,
+            color=color,
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, pad=0.15),
+        )
+
+    for idx, (ax, csv_name) in enumerate(zip(axes_flat, model_order)):
         entry = data[csv_name]
-        labels.append(entry["label"])
-        box_data.append(entry["df"][metric].dropna())
-        colors.append(entry["color"])
+        df = entry["df"].copy().sort_values("date")
+        df = df.drop_duplicates(subset=["date"], keep="last")
 
-    bp = ax.boxplot(box_data, patch_artist=True, tick_labels=labels)
-    for patch, color in zip(bp["boxes"], colors):
-        patch.set_facecolor(color)
-    for median in bp["medians"]:
-        median.set_color("black")
-        median.set_linewidth(1.5)
+        n_days = len(df)
+        x = np.arange(1, n_days + 1, dtype=float)
+        y = pd.to_numeric(df[metric], errors="coerce").to_numpy(dtype=float)
+        x_labels = df["date"].dt.strftime("%m-%d")
 
-    ax.set_ylabel(metric)
-    ax.grid(True, axis="y", alpha=0.3)
-    ax.set_title(f"{metric} Boxplot over all testdays for each model")
+        highlight_days = min(30, n_days)
+        highlight_start = n_days - highlight_days + 1
+        first_days = min(61, n_days)
+        last_days = min(30, n_days)
+
+        if csv_name in highlight_models:
+            ax.axvspan(highlight_start - 0.5, n_days + 0.5, color="lightgray", alpha=0.3, zorder=0)
+        ax.plot(
+            x,
+            y,
+            linestyle="-",
+            linewidth=1.0,
+            marker="o",
+            markersize=3,
+            color=entry["color"],
+        )
+        first_label_x = float((x[0] + x[first_days - 1]) / 2) if first_days > 0 else 1.0
+        last_label_x = float((x[-last_days] + x[-1]) / 2) if last_days > 0 else float(n_days)
+        plot_segment_mean(
+            ax,
+            x[:first_days],
+            y[:first_days],
+            color="#555555",
+            linestyle="--",
+            label_x=first_label_x,
+            label_ha="center",
+        )
+        plot_segment_mean(
+            ax,
+            x[-last_days:],
+            y[-last_days:],
+            color="#222222",
+            linestyle="-.",
+            label_x=last_label_x,
+            label_ha="center",
+        )
+
+        if csv_name in highlight_models and n_days > 0:
+            transition_x = highlight_start - 0.5
+            y_text = 0.98
+            txt_style = dict(transform=ax.get_xaxis_transform(), va="top", fontsize=7, color="#444444")
+            ax.text(
+                transition_x - 0.6,
+                y_text,
+                f"n = {first_days} rolling retrains",
+                ha="right",
+                **txt_style,
+            )
+            ax.text(
+                transition_x + 0.6,
+                y_text,
+                f"n = {last_days} frozen deployment days",
+                ha="left",
+                **txt_style,
+            )
+
+        ax.set_title(entry["label"])
+        ax.set_ylim(y_min, y_max)
+        ax.set_xlim(0.5, n_days + 0.5)
+        ax.set_xticks(x)
+        if idx == n_models - 1:
+            ax.set_xticklabels(x_labels, rotation=90, ha="center", fontsize=7)
+        else:
+            ax.tick_params(axis="x", which="both", labelbottom=False)
+        ax.grid(True, axis="y", alpha=0.3)
+
+    for ax in axes_flat:
+        ax.set_ylabel(metric)
+    axes_flat[-1].set_xlabel("Testday (date)")
+
+    fig.suptitle(f"{metric} over all test days per model")
+    fig.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_boxplots(data: dict, save_path: Path) -> None:
+    """Create 2 boxplot subplots with 8 boxes each (4 models x 2 periods)."""
+
+    ordered_model_csvs = [
+        "physical_model_testday_metrics.csv",
+        "source_model_testday_metrics.csv",
+        "target_model_testday_metrics.csv",
+        "transfer_model_testday_metrics.csv",
+    ]
+    model_order = [csv_name for csv_name in ordered_model_csvs if csv_name in data]
+
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=False, sharey=True)
+    subplot_specs = [("nMAE", "nMAE"), ("nRMSE", "nRMSE")]
+
+    for ax, (metric, title) in zip(axes, subplot_specs):
+        labels_61 = []
+        box_data_61 = []
+        colors_61 = []
+        labels_30 = []
+        box_data_30 = []
+        colors_30 = []
+
+        for csv_name in model_order:
+            entry = data[csv_name]
+            df = entry["df"].copy().sort_values("date").drop_duplicates(subset=["date"], keep="last")
+            n_days = len(df)
+            first_days = min(61, n_days)
+            last_days = min(30, n_days)
+
+            values_first = df.iloc[:first_days][metric].dropna()
+            values_last = df.iloc[-last_days:][metric].dropna()
+
+            labels_61.append(entry["label"])
+            box_data_61.append(values_first)
+            colors_61.append(entry["color"])
+            labels_30.append(entry["label"])
+            box_data_30.append(values_last)
+            colors_30.append(entry["color"])
+
+        labels = labels_61 + labels_30
+        box_data = box_data_61 + box_data_30
+        colors = colors_61 + colors_30
+
+        bp = ax.boxplot(box_data, patch_artist=True, tick_labels=labels)
+        for patch, color in zip(bp["boxes"], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.8)
+        for median in bp["medians"]:
+            median.set_color("black")
+            median.set_linewidth(1.5)
+
+        split_index = len(model_order)
+        if split_index > 0:
+            highlight_30_models = {
+                "target_model_testday_metrics.csv",
+                "transfer_model_testday_metrics.csv",
+            }
+            highlight_positions = [
+                split_index + model_order.index(csv_name) + 1
+                for csv_name in highlight_30_models
+                if csv_name in model_order
+            ]
+            if highlight_positions:
+                span_start = min(highlight_positions) - 0.5
+                span_end = max(highlight_positions) + 0.5
+                ax.axvspan(span_start, span_end, color="lightgray", alpha=0.25, zorder=0)
+                ax.text(
+                    (span_start + span_end) / 2,
+                    0.96,
+                    "frozen deployment days",
+                    transform=ax.get_xaxis_transform(),
+                    ha="center",
+                    va="top",
+                    fontsize=8,
+                    color="#555555",
+                )
+
+            ax.axvline(split_index + 0.5, color="#666666", linewidth=1.0, linestyle="--", alpha=0.9)
+
+
+        ax.set_title(f"{title}: retraining days 1 to 61 vs. deployment days 62 to 91")
+        ax.set_ylabel(metric)
+        ax.set_ylim(0.0, 0.25)
+        ax.grid(True, axis="y", alpha=0.3)
+        ax.tick_params(axis="x", labelrotation=20)
+
+    axes[-1].set_xlabel("Model")
+    fig.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close(fig)
 
 
 # ------------------------
@@ -215,15 +432,12 @@ def main() -> None:
         "target_model_testday_metrics.csv", data, OUTPUT_DIR / "overall_metrics_diff_target.png"
     )
 
-    # PNG Boxplots
-    fig_box, box_axes = plt.subplots(2, 1, figsize=(10, 7), sharex=False)
-    plot_boxplots(box_axes[0], "nMAE", data)
-    plot_boxplots(box_axes[1], "nRMSE", data)
-    box_axes[1].set_xlabel("Models")
+    # PNG Boxplots (split by period: first 61 and last 30 days)
+    plot_boxplots(data, OUTPUT_DIR / "overall_metrics_boxplots.png")
 
-    fig_box.tight_layout()
-    plt.savefig(OUTPUT_DIR / "overall_metrics_boxplots.png", dpi=150)
-    plt.close(fig_box)
+    # PNG Chronological per metric (4 subplots = 1 per model)
+    plot_metric_over_time_all_models("nMAE", data, OUTPUT_DIR / "overall_metrics_chrono_nmae.png")
+    plot_metric_over_time_all_models("nRMSE", data, OUTPUT_DIR / "overall_metrics_chrono_nrmse.png")
 
 
 if __name__ == "__main__":

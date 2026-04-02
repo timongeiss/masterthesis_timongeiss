@@ -7,6 +7,8 @@ from pathlib import Path
 
 # Installierte PV-Leistung in Watt (Normalisierung)
 INSTALLED_CAPACITY_W = 9720.0  
+DROP_INITIAL_DAYS = 4
+DROP_FINAL_DAYS = 2
 
 # Farben
 PLOT_COLORS_SINGLE = {
@@ -41,22 +43,29 @@ def get_run_date_from_filename(path):
     return pd.NaT                                       # nichts Passendes gefunden
 
 
-def target_days():
+def collect_available_days(csv_paths):
     """
-    Liste der Zieltage als DatetimeIndex (auf Mitternacht normalisiert).
+    Ermittelt alle verfügbaren Tage direkt aus den valid_time-Spalten
+    der vorhandenen CSV-Dateien (normalisiert auf Mitternacht).
     """
-    raw = [
-        "26.07.2025", "27.07.2025", "28.07.2025", "29.07.2025", "30.07.2025", "31.07.2025",
-        "01.08.2025", "02.08.2025", "03.08.2025", "04.08.2025",
-        "26.08.2025", "27.08.2025", "28.08.2025", "29.08.2025", "30.08.2025", "31.08.2025",
-        "01.09.2025", "02.09.2025", "03.09.2025", "04.09.2025",
-        "26.09.2025", "27.09.2025", "28.09.2025", "29.09.2025", "30.09.2025",
-        "01.10.2025", "02.10.2025", "03.10.2025", "04.10.2025", "05.10.2025",
-    ]
-    dt = pd.to_datetime(raw, dayfirst=True, errors="coerce") # Strings -> Datumswerte (DD.MM.YYYY)
-    dt = dt.dropna()                                         # ungültige Einträge entfernen
-    dt = dt.normalize()                                      # Uhrzeit auf 00:00 setzen
-    return pd.DatetimeIndex(dt)                              # als DatetimeIndex zurückgeben
+    days = set()
+    for path in csv_paths:
+        try:
+            df = pd.read_csv(
+                path,
+                usecols=["valid_time"],
+                encoding="utf-8",
+            )
+        except Exception:
+            continue
+
+        vt = pd.to_datetime(df["valid_time"], errors="coerce")
+        days.update(vt.dropna().dt.normalize().unique().tolist())
+
+    if not days:
+        return pd.DatetimeIndex([])
+
+    return pd.DatetimeIndex(sorted(days))
 
 
 def init_agg():
@@ -381,7 +390,15 @@ def main():
     if not csv_paths:                                      # keine Dateien gefunden
         raise FileNotFoundError(f"No CSV files found in {shared_dir}.")
 
-    days = target_days()                                   # Zieltage laden
+    days = collect_available_days(csv_paths)               # alle verfügbaren Tage aus den Daten laden
+    if days.empty:
+        raise ValueError("No valid days found in physical output CSVs.")
+    min_required_days = DROP_INITIAL_DAYS + DROP_FINAL_DAYS + 1
+    if len(days) < min_required_days:
+        raise ValueError(
+            f"Need at least {min_required_days} valid days, found only {len(days)}."
+        )
+    days = days[DROP_INITIAL_DAYS: len(days) - DROP_FINAL_DAYS]  # Tag 5 bis vorletzte 2 Tage
 
     # Speicherstrukturen vorbereiten
     by_day = {d: init_agg() for d in days}                 # Zähler pro Tag und Gruppe

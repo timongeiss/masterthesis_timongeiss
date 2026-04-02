@@ -47,7 +47,8 @@ SOL_ELEV_CANDS = ["solar_elevation_deg", "solar_elevation", "sol_elev_deg"]
 
 
 def list_exports(directory: Path) -> List[Path]:
-    return sorted(directory.glob("*.csv"))
+    # Include CSV exports from directory root and all nested run subdirectories.
+    return sorted(directory.rglob("*.csv"))
 
 
 def load_data(path: Path) -> pd.DataFrame:

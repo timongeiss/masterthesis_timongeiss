@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DIR = PROJECT_ROOT / "data" / "artifacts"
@@ -17,6 +18,65 @@ DEFAULT_CSVS = [
     DEFAULT_DIR / "source_model_testday_metrics.csv",
 ]
 EXPORT_DIR = PROJECT_ROOT / "reports" / "overall"
+CONFIG_PATH = PROJECT_ROOT / "configs" / "config_overall.yaml"
+
+
+def load_overall_color_map() -> dict[str, str]:
+    with CONFIG_PATH.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    return cfg["model_colors"]
+
+
+MODEL_COLORS = load_overall_color_map()
+
+
+def _beeswarm_x_positions(
+    y_vals: np.ndarray,
+    center_x: float,
+    x_half_width: float,
+    min_y_sep: float,
+    min_x_sep: float,
+) -> np.ndarray:
+    """Assign collision-aware x-positions for labels/points within one category."""
+    n = len(y_vals)
+    if n == 0:
+        return np.array([], dtype=float)
+
+    order = np.argsort(y_vals, kind="mergesort")
+    x_out = np.full(n, center_x, dtype=float)
+    placed: list[tuple[float, float]] = []
+
+    max_steps = max(1, int(x_half_width / min_x_sep))
+    offsets = [0.0]
+    for step in range(1, max_steps + 1):
+        d = step * min_x_sep
+        offsets.extend([d, -d])
+
+    for idx in order:
+        y = float(y_vals[idx])
+        chosen_x = center_x
+        found = False
+        for off in offsets:
+            if abs(off) > x_half_width:
+                continue
+            candidate_x = center_x + off
+            collides = False
+            for px, py in placed:
+                if abs(y - py) < min_y_sep and abs(candidate_x - px) < min_x_sep:
+                    collides = True
+                    break
+            if not collides:
+                chosen_x = candidate_x
+                found = True
+                break
+        if not found:
+            # Fallback in very dense areas
+            chosen_x = center_x + np.clip((len(placed) % 5 - 2) * 0.01, -x_half_width, x_half_width)
+
+        x_out[idx] = chosen_x
+        placed.append((chosen_x, y))
+
+    return x_out
 
 
 def add_testday_index(df: pd.DataFrame) -> pd.DataFrame:
@@ -57,14 +117,17 @@ def plot_testday_boxplots(csv_path: Path, out_dir: Path) -> Path:
         "day_ahead nRMSE",
     ]
 
-    palette_points = {
-        "all nMAE": "#ff7f0e",
-        "intra_day nMAE": "#2ca02c",
-        "day_ahead nMAE": "#d62728",
-        "all nRMSE": "#ff7f0e",
-        "intra_day nRMSE": "#2ca02c",
-        "day_ahead nRMSE": "#d62728",
-    }
+    stem = csv_path.stem.lower()
+    if "physical" in stem:
+        box_color = MODEL_COLORS["physical_model"]
+    elif "transfer" in stem:
+        box_color = MODEL_COLORS["transfer_model"]
+    elif "target" in stem:
+        box_color = MODEL_COLORS["target_model"]
+    elif "source" in stem:
+        box_color = MODEL_COLORS["source_model"]
+    else:
+        box_color = "#4c72b0"
 
     sns.set_style("whitegrid", {"grid.linestyle": "--", "grid.linewidth": 0.4})
     plt.rcParams.update(
@@ -88,7 +151,7 @@ def plot_testday_boxplots(csv_path: Path, out_dir: Path) -> Path:
         order=order,
         width=0.6,
         showcaps=True,
-        boxprops={"facecolor": "#4c72b0", "alpha": 0.35, "edgecolor": "black", "linewidth": 0.8},
+        boxprops={"facecolor": box_color, "alpha": 1.0, "edgecolor": "black", "linewidth": 0.8},
         medianprops={"color": "black", "linewidth": 0.8},
         whiskerprops={"color": "black", "linewidth": 0.8},
         capprops={"color": "black", "linewidth": 0.8},
@@ -96,30 +159,36 @@ def plot_testday_boxplots(csv_path: Path, out_dir: Path) -> Path:
         ax=ax,
     )
 
-    rng = np.random.default_rng(42)
+    y_min = float(np.nanmin(df_long["Value"]))
+    y_max = float(np.nanmax(df_long["Value"]))
+    y_span = max(1e-6, y_max - y_min)
+
     for i, key in enumerate(order):
-        sub = df_long[df_long["GroupMetric"] == key]
+        sub = df_long[df_long["GroupMetric"] == key].dropna(subset=["Value", "testday"])
         if sub.empty:
             continue
 
-        jitter = (rng.random(len(sub)) - 0.5) * 0.35
-        x_vals = np.full(len(sub), i) + jitter
+        x_vals = _beeswarm_x_positions(
+            y_vals=sub["Value"].to_numpy(dtype=float),
+            center_x=float(i),
+            x_half_width=0.42,
+            min_y_sep=y_span * 0.012,
+            min_x_sep=0.055,
+        )
         y_vals = sub["Value"].to_numpy()
         nums = sub["testday"].to_numpy()
 
-        ax.scatter(
-            x_vals,
-            y_vals,
-            color=palette_points[key],
-            s=14,
-            alpha=0.6,
-            zorder=3,
-            linewidths=0.3,
-            edgecolors="black",
-        )
-
         for x, y, n in zip(x_vals, y_vals, nums):
-            ax.text(x, y, str(int(n)), ha="center", va="center", fontsize=7, color="black", zorder=4)
+            ax.text(
+                x,
+                y,
+                str(int(n)),
+                ha="center",
+                va="center",
+                fontsize=5.5,
+                color=("red" if int(n) >= 62 else "black"),
+                zorder=4,
+            )
 
     ax.axvline(2.5, color="black", linestyle="--", alpha=0.3, linewidth=0.8)
 

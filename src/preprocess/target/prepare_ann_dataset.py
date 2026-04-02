@@ -1,6 +1,5 @@
-# ready for upload 23_11_2025
+# ready for upload 01_04_2026
 
-import random
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
@@ -13,17 +12,13 @@ PROJECT_ROOT = BASE_DIR.parents[2]
 
 # Pfade
 CONFIG_NORM_PATH = PROJECT_ROOT / "configs" / "config_norm.yaml"
-CONFIG_TESTDAYS_PATH = PROJECT_ROOT / "configs" / "config_testdays.yaml"
 INPUT_DIR = PROJECT_ROOT / "data" / "processed" / "physical_input"
-OUTPUT_TRAIN = PROJECT_ROOT / "data" / "processed" / "target_mlp_input" / "ann_train.csv"
-OUTPUT_VAL = PROJECT_ROOT / "data" / "processed" / "target_mlp_input" / "ann_val.csv"
-OUTPUT_TEST = PROJECT_ROOT / "data" / "processed" / "target_mlp_input" / "ann_test.csv"   # Output fuer Test-Tage
+OUTPUT_ALL = PROJECT_ROOT / "data" / "processed" / "target_mlp_input" / "ann_all.csv"
 
 # Erwartete Anzahl Zeilen pro Lauf (48h Vorhersage in 15-Minuten-Schritten) abzueglich letzten 15 min
 EXPECTED_STEPS = 48 * 4 - 1
 
 # Weitere Einstellungen
-VAL_FRACTION = 0.2          # Anteil der Laeufe fuer Validierung in prozent
 P_INSTALLED_KWP = 9.73      # installierte Leistung in kWp fuer normierung
 UTC_TO_LOCAL_OFFSET_H = 2   # gueltige Zeit ist UTC+2, run_id bleibt in UTC
 
@@ -41,19 +36,13 @@ def parse_run_id_from_filename(path):
 
 
 def load_norm_config(path: Path) -> dict:
-    """Liest die Normierungs-Parameter aus config_norm.yaml."""
+    """
+    Liest die Normierungs-Parameter aus config_norm.yaml.
+    """
     if not path.exists():
         raise FileNotFoundError(f"Norm-Config nicht gefunden: {path}")
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     return cfg
-
-
-def load_test_days(path: Path) -> set:
-    """Liest Testtage (dd.mm.yyyy) aus der YAML-Liste."""
-    if not path.exists():
-        raise FileNotFoundError(f"Testday-Config nicht gefunden: {path}")
-    days = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return {datetime.strptime(day, "%d.%m.%Y").date() for day in days}
 
 
 norm_cfg = load_norm_config(CONFIG_NORM_PATH)
@@ -61,23 +50,12 @@ ASWDIR_NORM = norm_cfg["ASWDIR_NORM"]
 ASWDIF_NORM = norm_cfg["ASWDIF_NORM"]
 T2M_LOWER_NORM = norm_cfg["T2M_LOWER_NORM"]
 T2M_UPPER_NORM = T2M_LOWER_NORM + norm_cfg.get("T2M_RANGE", 0.0)
-TEST_DATES = load_test_days(CONFIG_TESTDAYS_PATH)
 
 
-def overlaps_test_days(valid_times, test_dates):
+def prepare_one_file(path, p_installed_w):
     """
-    Prueft, ob eine Zeitreihe (valid_times) irgendeinen der Test-Tage enthaelt.
-    Gibt True zurueck, wenn es eine Ueberschneidung gibt.
-    """
-    return bool(set(valid_times.dt.date) & test_dates)
-
-
-def prepare_one_file(path, p_installed_w, test_dates):
-    """
-    Liest eine CSV-Datei ein, bereitet sie fuer das ANN-Training/Test vor
+    Liest eine CSV-Datei ein und bereitet sie fuer das ANN-Training vor.
     und gibt einen DataFrame zurueck.
-    Die Aufteilung in Train/Val/Test passiert NICHT hier,
-    sondern spaeter in main().
     """
     # Modellstart aus Dateinamen (UTC)
     run_start = parse_run_id_from_filename(path)
@@ -164,129 +142,41 @@ def prepare_one_file(path, p_installed_w, test_dates):
     return df[cols].reset_index(drop=True)
 
 
-def split_train_val_by_run(df, val_fraction):
-    """
-    Teilt die Daten in Trainings- und Validierungsdaten auf
-    Die Aufteilung passiert auf Basis der run_id (ganze Laeufe werden getrennt)
-    """
-    run_ids = df["run_id"].unique().tolist()
-    rng = random.Random(42)
-    rng.shuffle(run_ids)
-
-    val_count = max(1, int(round(len(run_ids) * val_fraction)))
-    val_ids = set(run_ids[:val_count])
-
-    val_df = df[df["run_id"].isin(val_ids)].reset_index(drop=True)
-    train_df = df[~df["run_id"].isin(val_ids)].reset_index(drop=True)
-
-    return train_df, val_df
-
-
 # ---- Hauptlaeufer ----
 
 def main():
     """
     - CSV-Dateien einlesen
     - Daten vorbereiten und kombinieren
-    - Trainings-, Validierungs- und Testdatensatz erzeugen
-    - Ergebnisse als CSV speichern
+    - Einen gemeinsamen Basisdatensatz (ann_all.csv) erzeugen
     """
     # installierte Leistung von kWp in W umrechnen
     p_installed_w = P_INSTALLED_KWP * 1000.0
 
-    # Testtage aus Config
-    test_dates = TEST_DATES
-
     # Alle passenden CSV-Dateien im Eingabeordner finden
     files = sorted(INPUT_DIR.glob("pv_weather_*.csv"))
-
-    frames = []        # Train/Val
-    test_frames = []   # Test-Kandidaten (Runs, die Testtage beruehren)
+    if not files:
+        raise FileNotFoundError(f"Keine Input-Dateien gefunden in: {INPUT_DIR}")
+    frames = []
 
     # Jede Datei nacheinander verarbeiten
     for f in files:
         try:
-            frame = prepare_one_file(f, p_installed_w, test_dates)
+            frame = prepare_one_file(f, p_installed_w)
         except Exception as e:
             raise RuntimeError(f"Failed processing {f}: {e}") from e
-
-        # Laeufe mit Testtagen -> Test-Kandidaten, sonst Train/Val
-        if overlaps_test_days(frame["valid_time"], test_dates):
-            test_frames.append(frame)
-        else:
-            frames.append(frame)
-
-    # ---- Trainings- / Validierungsdaten aufbereiten ----
+        frames.append(frame)
 
     combined = pd.concat(frames, axis=0, ignore_index=True)
     combined = combined.sort_values(["model_start", "valid_time"]).reset_index(drop=True)
-
-    train_df, val_df = split_train_val_by_run(
-        combined, val_fraction=VAL_FRACTION
-    )
-
-    OUTPUT_TRAIN.parent.mkdir(parents=True, exist_ok=True)
-    train_df.to_csv(OUTPUT_TRAIN, index=False)
-    val_df.to_csv(OUTPUT_VAL, index=False)
-
-    # ---- Testdaten aufbereiten ----
-    # Jetzt zusaetzliche Bedingung:
-    # In ann_test.csv sollen NUR run_ids landen,
-    # deren model_start-Datum selbst ein Testtag ist.
-    combined_test = None
-    if test_frames:
-        combined_test_all = pd.concat(test_frames, axis=0, ignore_index=True)
-        combined_test_all = combined_test_all.sort_values(
-            ["model_start", "valid_time"]
-        ).reset_index(drop=True)
-
-        # run_ids auswaehlen, deren Startdatum ein Testtag ist
-        keep_run_ids = []
-        for run_id, group in combined_test_all.groupby("run_id"):
-            start_date = group["model_start"].iloc[0].date()
-            if start_date in test_dates:
-                keep_run_ids.append(run_id)
-
-        combined_test = combined_test_all[
-            combined_test_all["run_id"].isin(keep_run_ids)
-        ].reset_index(drop=True)
-
-        if not combined_test.empty:
-            OUTPUT_TEST.parent.mkdir(parents=True, exist_ok=True)
-            combined_test.to_csv(OUTPUT_TEST, index=False)
-        else:
-            print(
-                "Hinweis: Es gibt zwar Laeufe, die Testtage beruehren, "
-                "aber kein run_id startet an einem Testtag. "
-                "ann_test.csv wird nicht geschrieben."
-            )
-            combined_test = None
+    OUTPUT_ALL.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(OUTPUT_ALL, index=False)
 
     # ---- Zusammenfassung auf der Konsole ausgeben ----
     print(f"Total runs read: {len(files)}")
-    print(
-        "Kept train/val runs:",
-        combined["run_id"].nunique(),
-        "-> train",
-        train_df["run_id"].nunique(),
-        "val",
-        val_df["run_id"].nunique(),
-    )
-    print(
-        "Rows:",
-        "train",
-        len(train_df),
-        "val",
-        len(val_df),
-    )
-    if combined_test is not None:
-        print("Test runs (start on test days):", combined_test["run_id"].nunique())
-        print("Rows: test", len(combined_test))
-        print("Test output written to:", OUTPUT_TEST)
-    else:
-        print("No test runs with model_start on test days written.")
-
-    print("Outputs written to:", OUTPUT_TRAIN, OUTPUT_VAL, OUTPUT_TEST, sep="\n- ")
+    print("Total runs in ann_all:", combined["run_id"].nunique())
+    print("Rows in ann_all:", len(combined))
+    print("Output written to:", OUTPUT_ALL)
 
 
 if __name__ == "__main__":

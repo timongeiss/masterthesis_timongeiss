@@ -10,4 +10,10 @@ models:
   - ["source_model_testday_metrics.csv", "Source Model", "source_model"]
   - ["target_model_testday_metrics.csv", "Target Model", "target_model"]
 
+models_all:
+  - ["transfer_model_all_metrics.csv", "Transfer Learning", "transfer_model"]
+  - ["physical_model_all_metrics.csv", "Physical Model", "physical_model"]
+  - ["source_model_all_metrics.csv", "Source Model", "source_model"]
+  - ["target_model_all_metrics.csv", "Target Model", "target_model"]
+
 transfer_csv: "transfer_model_testday_metrics.csv"

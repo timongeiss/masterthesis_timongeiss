@@ -11,21 +11,15 @@ import mlp_model as mlp
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[2]
-CONFIG_TESTDAYS_PATH = PROJECT_ROOT / "configs" / "config_testdays.yaml"
 CONFIG_TARGET_SYSTEM = PROJECT_ROOT / "configs" / "config_target_system.yaml"
 CONFIG_TARGET_MLP = PROJECT_ROOT / "configs" / "config_target_mlp.yaml"
 
+ANN_ALL_CSV = PROJECT_ROOT / "data" / "processed" / "target_mlp_input" / "ann_all.csv"
 TRAIN_CSV = PROJECT_ROOT / "data" / "processed" / "target_mlp_input" / "ann_train.csv"
 VAL_CSV = PROJECT_ROOT / "data" / "processed" / "target_mlp_input" / "ann_val.csv"
 TEST_CSV = PROJECT_ROOT / "data" / "processed" / "target_mlp_input" / "ann_test.csv"
-LOOKUP_SOURCES = [
-    TRAIN_CSV,
-    VAL_CSV,
-    TEST_CSV,
-]
 
 SAVE_PATH = PROJECT_ROOT / "data" / "artifacts" / "target_mlp_checkpoint.pt"
-TEST_METRICS_PATH = PROJECT_ROOT / "data" / "artifacts" / "target_model_testday_metrics.csv"
 RESULTS_DIR = PROJECT_ROOT / "data" / "results" / "target_output"
 
 # ---------------------------------------------------------
@@ -33,7 +27,6 @@ RESULTS_DIR = PROJECT_ROOT / "data" / "results" / "target_output"
 # ---------------------------------------------------------
 
 cfg_target = mlp.load_target_config(CONFIG_TARGET_SYSTEM)
-TEST_DATES = mlp.load_test_days(CONFIG_TESTDAYS_PATH)
 cfg_mlp = mlp.load_mlp_config(CONFIG_TARGET_MLP)
 
 
@@ -52,23 +45,9 @@ def main():
     
     # Initale Einstellungen
     mlp.seed_everything()
-    feature_cols = cfg_mlp["feature_cols"]
-    target_col = cfg_mlp["target_col"]
-    meta_dim = cfg_mlp["meta_dim"]
-    
-    input_dim = mlp.compute_input_dim(feature_cols, meta_dim)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Konstanten Feature-Block aus Vorgabe
-    meta_tuple = (
-        cfg_target["DC_CAPACITY_KWP"],
-        cfg_target["TILT_DEG"] / 90.0,                  # normierung
-        (cfg_target["AZIMUTH_DEG"] % 360.0) / 360.0,    # normierung
-        cfg_target["DC_EFF_PER_KWP"],
+    device, input_dim, meta_tuple, label_lookup = mlp.build_target_runtime_context(
+        cfg_mlp, cfg_target, ANN_ALL_CSV
     )
-
-    label_lookup = mlp.build_label_lookup(LOOKUP_SOURCES, target_col)
 
     train_loader, val_loader = mlp.prepare_loaders_target(TRAIN_CSV, VAL_CSV, meta_tuple, label_lookup, BATCH_SIZE, cfg_mlp)
 
@@ -86,6 +65,7 @@ def main():
 
     # der kleinste bisher gesehene Loss Wert
     best_val = float("inf") #initial auf unendlich gesetzt -> Damit jede echte Validierungs-Loss im ersten Epochendurchlauf automatisch kleiner
+    best_state = None
     SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     # Training durchführen über anzahl der geforderten epochen
@@ -99,16 +79,27 @@ def main():
 
         if val_loss < best_val:
             best_val = val_loss
+            best_state = model.state_dict()
             torch.save(model.state_dict(), SAVE_PATH)
             print("Modell gespeichert:", SAVE_PATH)
 
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
     # Test-Auswertung
-    test_metrics = mlp.evaluate_on_test(model, device, meta_tuple, label_lookup, cfg_mlp, TEST_CSV, TEST_DATES, export_predictions=True, results_dir=RESULTS_DIR)
-    
-    # csv exportieren
-    TEST_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    test_metrics.to_csv(TEST_METRICS_PATH, index=False)
-    print("Testmetriken gespeichert:", TEST_METRICS_PATH)
+    test_metrics = mlp.evaluate_on_test(
+        model,
+        device,
+        meta_tuple,
+        label_lookup,
+        cfg_mlp,
+        TEST_CSV,
+        export_predictions=True,
+        results_dir=RESULTS_DIR,
+    )
+    print("Testmetriken berechnet:", len(test_metrics), "Zeilen")
+    if not test_metrics.empty:
+        print(test_metrics.to_string(index=False))
 
 
 
@@ -120,10 +111,20 @@ if __name__ == "__main__":
 
 
 # ---------------------------------------------------------
-# Extern aufrufbarer Helper für Grid/Experimente
+# Extern aufrufbarer Helper für Grid/Experimente und Meta-Skripte
 # ---------------------------------------------------------
 
-def train_and_eval(lr, epochs, hidden_sizes, save_path, batch_size=None, patience=None, save_test_metrics=True, save_predictions=False):
+def train_and_eval(
+    lr,
+    epochs,
+    hidden_sizes,
+    save_path=None,
+    batch_size=None,
+    patience=None,
+    save_test_metrics=False,
+    save_predictions=False,
+    results_dir=None,
+):
     """
     Parameterisierte Variante der main-Logik:
     - lr: Lernrate
@@ -134,21 +135,9 @@ def train_and_eval(lr, epochs, hidden_sizes, save_path, batch_size=None, patienc
     - patience: optional Early-Stopping-Patience (Anzahl Epochen ohne Verbesserung)
     """
     mlp.seed_everything()
-    feature_cols = cfg_mlp["feature_cols"]
-    target_col = cfg_mlp["target_col"]
-    meta_dim = cfg_mlp["meta_dim"]
-    input_dim = mlp.compute_input_dim(feature_cols, meta_dim)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    meta_tuple = (
-        cfg_target["DC_CAPACITY_KWP"],
-        cfg_target["TILT_DEG"] / 90.0,                  # normierung
-        (cfg_target["AZIMUTH_DEG"] % 360.0) / 360.0,    # normierung
-        cfg_target["DC_EFF_PER_KWP"],
+    device, input_dim, meta_tuple, label_lookup = mlp.build_target_runtime_context(
+        cfg_mlp, cfg_target, ANN_ALL_CSV
     )
-
-    label_lookup = mlp.build_label_lookup(LOOKUP_SOURCES, target_col)
 
     bs = batch_size if batch_size is not None else BATCH_SIZE
     stop_patience = patience if patience is not None else epochs  # kein Early-Stopping wenn nicht gesetzt
@@ -164,8 +153,9 @@ def train_and_eval(lr, epochs, hidden_sizes, save_path, batch_size=None, patienc
 
     best_val = float("inf")
     best_state = None
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_path_obj = Path(save_path) if save_path is not None else None
+    if save_path_obj is not None:
+        save_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
     epochs_no_improve = 0
     for epoch in range(1, epochs + 1):
@@ -175,7 +165,6 @@ def train_and_eval(lr, epochs, hidden_sizes, save_path, batch_size=None, patienc
         if val_loss < best_val:
             best_val = val_loss
             best_state = model.state_dict()
-            torch.save(model.state_dict(), save_path)
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
@@ -185,12 +174,59 @@ def train_and_eval(lr, epochs, hidden_sizes, save_path, batch_size=None, patienc
 
     if best_state is not None:
         model.load_state_dict(best_state)
+        if save_path_obj is not None:
+            mlp.save_checkpoint_with_retry(best_state, save_path_obj)
         
-    test_metrics = mlp.evaluate_on_test(model, device, meta_tuple, label_lookup, cfg_mlp, TEST_CSV, TEST_DATES, export_predictions=False, results_dir=None)
-    
-    
-    if save_test_metrics and test_metrics is not None and not test_metrics.empty:
-        TEST_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        test_metrics.to_csv(TEST_METRICS_PATH, index=False)
+    export_dir = Path(results_dir) if results_dir is not None else None
+    test_metrics = mlp.evaluate_on_test(
+        model,
+        device,
+        meta_tuple,
+        label_lookup,
+        cfg_mlp,
+        TEST_CSV,
+        export_predictions=save_predictions,
+        results_dir=export_dir,
+    )
+
+    if save_test_metrics:
+        print(
+            "Hinweis: save_test_metrics ist veraltet. "
+            "Aggregation der Metrics erfolgt im Meta-Skript."
+        )
 
     return best_val, test_metrics
+
+
+def evaluate_checkpoint_on_test(
+    checkpoint_path,
+    hidden_sizes=None,
+    save_predictions=False,
+    results_dir=None,
+):
+    """
+    Lädt einen Checkpoint und evaluiert ausschließlich auf ann_test.csv.
+    Gedacht für Freeze-Phase ohne erneutes Training.
+    """
+    mlp.seed_everything()
+    device, input_dim, meta_tuple, label_lookup = mlp.build_target_runtime_context(
+        cfg_mlp, cfg_target, ANN_ALL_CSV
+    )
+    hs = hidden_sizes if hidden_sizes is not None else HIDDEN_SIZES
+    model = mlp.WindowMLP(hs, input_dim).to(device)
+    state = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(state)
+    model.eval()
+
+    export_dir = Path(results_dir) if results_dir is not None else None
+    test_metrics = mlp.evaluate_on_test(
+        model,
+        device,
+        meta_tuple,
+        label_lookup,
+        cfg_mlp,
+        TEST_CSV,
+        export_predictions=save_predictions,
+        results_dir=export_dir,
+    )
+    return test_metrics

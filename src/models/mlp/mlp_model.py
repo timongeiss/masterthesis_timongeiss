@@ -3,6 +3,7 @@
 import pandas as pd
 import numpy as np
 import random
+import time
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -41,18 +42,6 @@ def load_target_config(path: Path) -> dict:
     evaluate_sourcemlp_on_target.py
     """
     return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def load_test_days(path: Path) -> set:
-    """
-    Liest Testtage (dd.mm.yyyy) aus einer YAML-Liste und gibt Datums-Set zurück.
-    genutzt in:
-    train_target_mlp_with_test.py,
-    transfer_source_to_target_with_test.py,
-    evaluate_sourcemlp_on_target.py.
-    """
-    days = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return {pd.to_datetime(d, dayfirst=True).date() for d in days}
 
 
 def load_metadata_source(path: Path, dc_eff_per_kwp: float) -> dict:
@@ -165,6 +154,51 @@ def build_label_lookup(paths, target_col) -> dict[pd.Timestamp, float]:
         lookup.update({ts: val for ts, val in zip(df["valid_time"], df[target_col])})
         
     return lookup
+
+
+def build_target_runtime_context(cfg_mlp: dict, cfg_target: dict, ann_all_csv: Path):
+    """
+    Baut gemeinsame Laufzeitobjekte fuer Target-Workflows:
+    device, input_dim, meta_tuple, label_lookup.
+    Lookup-Quelle ist immer ann_all.csv.
+    """
+    feature_cols = cfg_mlp["feature_cols"]
+    target_col = cfg_mlp["target_col"]
+    meta_dim = cfg_mlp.get("meta_dim", DEFAULT_META_DIM)
+    input_dim = compute_input_dim(feature_cols, meta_dim)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Metadaten für das Ziel-System
+    meta_tuple = (
+        cfg_target["DC_CAPACITY_KWP"],
+        cfg_target["TILT_DEG"] / 90.0,  #normierung auf [0,1]
+        (cfg_target["AZIMUTH_DEG"] % 360.0) / 360.0,    #normierung auf [0,1]
+        cfg_target["DC_EFF_PER_KWP"],
+    )
+    label_lookup = build_label_lookup([ann_all_csv], target_col)
+    return device, input_dim, meta_tuple, label_lookup
+
+
+def save_checkpoint_with_retry(state_dict, save_path: Path, retries: int = 5, sleep_seconds: float = 0.2) -> None:
+    """
+    Speichert robust mit Retries und atomarem Replace.
+    Hilft bei transienten File-Locks unter Windows.
+    """
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = save_path.with_suffix(save_path.suffix + ".tmp")
+    last_error = None
+
+    for _ in range(retries):
+        try:
+            torch.save(state_dict, tmp_path)
+            tmp_path.replace(save_path)
+            return
+        except Exception as err:
+            last_error = err
+            time.sleep(sleep_seconds)
+
+    raise RuntimeError(
+        f"Checkpoint konnte nicht gespeichert werden: {save_path} (retries={retries})"
+    ) from last_error
 
 
 def make_feature_block(window: pd.DataFrame, meta_tuple: tuple, start_power: float, feature_cols: list, target_col: str) -> tuple[np.ndarray, np.ndarray]:
@@ -470,7 +504,17 @@ def export_predictions_per_run(df_all: pd.DataFrame, results_dir: Path) -> None:
         grp.sort_values("valid_time").to_csv(results_dir / fname, index=False)
 
 
-def evaluate_on_test(model, device, meta_tuple, label_lookup, cfg_mlp, test_csv_path, test_dates, export_predictions: bool = False, results_dir: Path = None):
+def evaluate_on_test(
+    model,
+    device,
+    meta_tuple,
+    label_lookup,
+    cfg_mlp,
+    test_csv_path,
+    test_dates=None,
+    export_predictions: bool = False,
+    results_dir: Path = None,
+):
     """
     Evaluiert das Modell auf ann_test.csv und gibt einen DataFrame mit Metriken zurück.
     Speichert optional Vorhersagen pro run_id als CSV.
@@ -521,7 +565,9 @@ def evaluate_on_test(model, device, meta_tuple, label_lookup, cfg_mlp, test_csv_
             # windowweise ergebnis anhängen
             records.append(run_df)
     
-    # alle ergebnisse zusammenketten
+    # alle ergebnisse zusammenketten und in data\results ablegen
+    if not records:
+        return pd.DataFrame(columns=["date", "group", "nRMSE", "nMAE", "count"])
     df_all = pd.concat(records, ignore_index=True)
     if export_predictions:
         export_predictions_per_run(df_all, results_dir)
@@ -565,8 +611,9 @@ def evaluate_on_test(model, device, meta_tuple, label_lookup, cfg_mlp, test_csv_
             
     
     metrics = pd.DataFrame(rows)
-    # nur definierte Testtage behalten
-    metrics = metrics[metrics["date"].isin(test_dates)]
+    # Optional: nur definierte Testtage behalten
+    if test_dates is not None:
+        metrics = metrics[metrics["date"].isin(test_dates)]
     
     return metrics
 
