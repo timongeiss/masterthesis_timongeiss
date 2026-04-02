@@ -30,10 +30,10 @@ quantity = 6
 
 
 [moduletype]
-v_mp = 30.5
-i_mp = 8.7
-v_oc = 38.0
-i_sc = 9.2
-alpha_sc = 0.0045
-beta_voc = -0.0032
+v_mp = 31.26
+i_mp = 12.96
+v_oc = 37.2
+i_sc = 13.76
+alpha_sc = 0.00045
+beta_voc = -0.0027
 gamma_pdc = -0.0035
