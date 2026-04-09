@@ -46,19 +46,29 @@ def _beeswarm_x_positions(
     x_out = np.full(n, center_x, dtype=float)
     placed: list[tuple[float, float]] = []
 
-    max_steps = max(1, int(x_half_width / min_x_sep))
-    offsets = [0.0]
-    for step in range(1, max_steps + 1):
+    lane_offsets = [0.0]
+    step = 1
+    while step * min_x_sep <= x_half_width + 1e-12:
         d = step * min_x_sep
-        offsets.extend([d, -d])
+        lane_offsets.extend([d, -d])
+        step += 1
+    # Ensure edge lanes are available for dense clusters.
+    lane_offsets.extend([x_half_width, -x_half_width])
+
+    seen: set[float] = set()
+    offsets: list[float] = []
+    for off in lane_offsets:
+        clipped = float(np.clip(off, -x_half_width, x_half_width))
+        key = round(clipped, 8)
+        if key in seen:
+            continue
+        seen.add(key)
+        offsets.append(clipped)
 
     for idx in order:
         y = float(y_vals[idx])
-        chosen_x = center_x
-        found = False
-        for off in offsets:
-            if abs(off) > x_half_width:
-                continue
+        feasible_lane_idxs: list[int] = []
+        for lane_idx, off in enumerate(offsets):
             candidate_x = center_x + off
             collides = False
             for px, py in placed:
@@ -66,13 +76,28 @@ def _beeswarm_x_positions(
                     collides = True
                     break
             if not collides:
-                chosen_x = candidate_x
-                found = True
-                break
-        if not found:
-            # Fallback in very dense areas
-            chosen_x = center_x + np.clip((len(placed) % 5 - 2) * 0.01, -x_half_width, x_half_width)
+                feasible_lane_idxs.append(lane_idx)
 
+        if feasible_lane_idxs:
+            # Always place as close to center as possible (if collision-free).
+            best_lane_idx = min(feasible_lane_idxs, key=lambda j: abs(offsets[j]))
+        else:
+            # In dense areas, pick the lane with the best clearance.
+            def _clearance_score(j: int) -> float:
+                candidate_x = center_x + offsets[j]
+                if not placed:
+                    return float("inf")
+                return min(
+                    max(
+                        abs(y - py) / max(min_y_sep, 1e-12),
+                        abs(candidate_x - px) / max(min_x_sep, 1e-12),
+                    )
+                    for px, py in placed
+                )
+
+            best_lane_idx = max(range(len(offsets)), key=lambda j: (_clearance_score(j), -abs(offsets[j])))
+
+        chosen_x = center_x + offsets[best_lane_idx]
         x_out[idx] = chosen_x
         placed.append((chosen_x, y))
 
@@ -103,19 +128,12 @@ def plot_testday_boxplots(csv_path: Path, out_dir: Path) -> Path:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", "."), errors="coerce")
 
     df = add_testday_index(df)
+    df = df[df["group"] == "all"].copy()
 
     id_cols = ["date", "group", "testday"]
     df_long = df.melt(id_vars=id_cols, value_vars=["nMAE", "nRMSE"], var_name="Metric", value_name="Value")
-    df_long["GroupMetric"] = df_long["group"] + " " + df_long["Metric"]
-
-    order = [
-        "all nMAE",
-        "intra_day nMAE",
-        "day_ahead nMAE",
-        "all nRMSE",
-        "intra_day nRMSE",
-        "day_ahead nRMSE",
-    ]
+    df_long["GroupMetric"] = df_long["Metric"]
+    order = ["nMAE", "nRMSE"]
 
     stem = csv_path.stem.lower()
     if "physical" in stem:
@@ -141,7 +159,7 @@ def plot_testday_boxplots(csv_path: Path, out_dir: Path) -> Path:
         }
     )
 
-    fig = plt.figure(figsize=(10, 5), dpi=150)
+    fig = plt.figure(figsize=(11.7, 6.6), dpi=150)
     ax = plt.gca()
 
     sns.boxplot(
@@ -149,7 +167,7 @@ def plot_testday_boxplots(csv_path: Path, out_dir: Path) -> Path:
         x="GroupMetric",
         y="Value",
         order=order,
-        width=0.6,
+        width=0.72,
         showcaps=True,
         boxprops={"facecolor": box_color, "alpha": 1.0, "edgecolor": "black", "linewidth": 0.8},
         medianprops={"color": "black", "linewidth": 0.8},
@@ -163,17 +181,21 @@ def plot_testday_boxplots(csv_path: Path, out_dir: Path) -> Path:
     y_max = float(np.nanmax(df_long["Value"]))
     y_span = max(1e-6, y_max - y_min)
 
+    medians: dict[str, float] = {}
     for i, key in enumerate(order):
         sub = df_long[df_long["GroupMetric"] == key].dropna(subset=["Value", "testday"])
         if sub.empty:
             continue
 
+        median_val = float(np.nanmedian(sub["Value"].to_numpy(dtype=float)))
+        medians[key] = median_val
+
         x_vals = _beeswarm_x_positions(
             y_vals=sub["Value"].to_numpy(dtype=float),
             center_x=float(i),
-            x_half_width=0.42,
-            min_y_sep=y_span * 0.012,
-            min_x_sep=0.055,
+            x_half_width=0.46,
+            min_y_sep=y_span * 0.03,
+            min_x_sep=0.04,
         )
         y_vals = sub["Value"].to_numpy()
         nums = sub["testday"].to_numpy()
@@ -185,18 +207,18 @@ def plot_testday_boxplots(csv_path: Path, out_dir: Path) -> Path:
                 str(int(n)),
                 ha="center",
                 va="center",
-                fontsize=5.5,
-                color=("red" if int(n) >= 62 else "black"),
+                fontsize=11.0,
+                color=("#ff00aa" if int(n) >= 62 else "black"),
                 zorder=4,
             )
 
-    ax.axvline(2.5, color="black", linestyle="--", alpha=0.3, linewidth=0.8)
-
-    ax.set_title("Group-wise comparison of nMAE and nRMSE", fontsize=11)
-    ax.set_xlabel("Forecast group and metric")
-    ax.set_ylabel("Normalized error value")
+    ax.set_title("Comparison of nMAE and nRMSE", fontsize=19, pad=12)
+    ax.set_xlabel("Error metric", fontsize=15, labelpad=8)
+    ax.set_ylabel("Normalized error value", fontsize=15, labelpad=8)
     ax.set_xticks(range(len(order)))
-    ax.set_xticklabels(order, rotation=20, ha="right")
+    xtick_labels = [f"{metric}\nMedian: {medians[metric]:.3f}" if metric in medians else metric for metric in order]
+    ax.set_xticklabels(xtick_labels, fontsize=14)
+    ax.tick_params(axis="y", labelsize=13)
     ax.grid(axis="y", linestyle="--", linewidth=0.4, alpha=0.35)
 
     fig.tight_layout()

@@ -40,8 +40,8 @@ os.makedirs(EXPORT_DIR, exist_ok=True)
 SITE_INVERTER_DC_MAX = 3500.0
 
 # Debug window for targeted diagnostics (local time, naive timestamps)
-DEBUG_START = pd.Timestamp("2025-08-26 17:00:00")
-DEBUG_END = pd.Timestamp("2025-08-26 19:00:00")
+DEBUG_START = pd.Timestamp("2025-08-19 16:00:00")
+DEBUG_END = pd.Timestamp("2025-08-19 19:00:00")
 
 def process_single_file(
     input_file: str,

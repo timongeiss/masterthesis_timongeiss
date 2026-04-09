@@ -20,7 +20,7 @@ INPUT_DIR  = PROJECT_ROOT / "data" / "processed" / "resampled_rea"
 PLOT_CONFIG = {
     "figsize": (7, 6),
     "dpi": 150,
-    "fontsize": 6,
+    "fontsize": 14,
     "linewidth": 1.0,
     "grid": True,
     "grid_style": ":",

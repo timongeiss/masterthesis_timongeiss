@@ -327,8 +327,12 @@ def plot_boxplots(data: dict, save_path: Path) -> None:
     ]
     model_order = [csv_name for csv_name in ordered_model_csvs if csv_name in data]
 
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=False, sharey=True)
+    fig, axes = plt.subplots(2, 1, figsize=(8.27, 6.69), sharex=False, sharey=True)
     subplot_specs = [("nMAE", "nMAE"), ("nRMSE", "nRMSE")]
+
+    def compact_model_label(label: str) -> str:
+        compact = label.replace("Model", "").replace("Learning", "")
+        return " ".join(compact.split())
 
     for ax, (metric, title) in zip(axes, subplot_specs):
         labels_61 = []
@@ -348,10 +352,11 @@ def plot_boxplots(data: dict, save_path: Path) -> None:
             values_first = df.iloc[:first_days][metric].dropna()
             values_last = df.iloc[-last_days:][metric].dropna()
 
-            labels_61.append(entry["label"])
+            short_label = compact_model_label(entry["label"])
+            labels_61.append(short_label)
             box_data_61.append(values_first)
             colors_61.append(entry["color"])
-            labels_30.append(entry["label"])
+            labels_30.append(short_label)
             box_data_30.append(values_last)
             colors_30.append(entry["color"])
 
@@ -359,7 +364,19 @@ def plot_boxplots(data: dict, save_path: Path) -> None:
         box_data = box_data_61 + box_data_30
         colors = colors_61 + colors_30
 
-        bp = ax.boxplot(box_data, patch_artist=True, tick_labels=labels)
+        median_values = []
+        for values in box_data:
+            if len(values) == 0:
+                median_values.append(float("nan"))
+            else:
+                median_values.append(float(np.nanmedian(values)))
+
+        tick_labels_with_median = [
+            f"{label}\n{median_val:.3f}" if np.isfinite(median_val) else f"{label}\n-"
+            for label, median_val in zip(labels, median_values)
+        ]
+
+        bp = ax.boxplot(box_data, patch_artist=True, tick_labels=tick_labels_with_median)
         for patch, color in zip(bp["boxes"], colors):
             patch.set_facecolor(color)
             patch.set_alpha(0.8)
@@ -389,22 +406,27 @@ def plot_boxplots(data: dict, save_path: Path) -> None:
                     transform=ax.get_xaxis_transform(),
                     ha="center",
                     va="top",
-                    fontsize=8,
+                    fontsize=10,
                     color="#555555",
                 )
 
             ax.axvline(split_index + 0.5, color="#666666", linewidth=1.0, linestyle="--", alpha=0.9)
 
 
-        ax.set_title(f"{title}: retraining days 1 to 61 vs. deployment days 62 to 91")
-        ax.set_ylabel(metric)
+        ax.set_title(
+            f"{title}: retraining days 1 to 61 vs. deployment days 62 to 91",
+            fontsize=14,
+            pad=12,
+        )
+        ax.set_ylabel(metric, fontsize=13)
         ax.set_ylim(0.0, 0.25)
         ax.grid(True, axis="y", alpha=0.3)
-        ax.tick_params(axis="x", labelrotation=20)
+        ax.tick_params(axis="x", labelrotation=0, labelsize=12, pad=8)
+        ax.tick_params(axis="y", labelsize=12)
 
-    axes[-1].set_xlabel("Model")
-    fig.tight_layout()
-    plt.savefig(save_path, dpi=150)
+    axes[-1].set_xlabel("Model", fontsize=13, labelpad=10)
+    fig.tight_layout(pad=1.8)
+    plt.savefig(save_path, dpi=300)
     plt.close(fig)
 
 

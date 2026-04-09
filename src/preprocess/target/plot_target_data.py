@@ -18,10 +18,11 @@ CODE_SELECTION = {
 }
 
 
+
 PLOT_CONFIG = {
     "figsize": (7, 6),        # Größe der Abbildung (Breite, Höhe)
     "dpi": 150,               # Auflösung der Abbildung
-    "fontsize": 6,            # Grundschriftgröße
+    "fontsize": 14,            # Grundschriftgröße
     "linewidth": 1.0,         # Linienbreite
     "grid": True,             # Gitterlinien aktivieren
     "grid_style": ":",        # Stil der Gitterlinien
@@ -35,9 +36,9 @@ PLOT_CONFIG = {
 SERIES = [
     ("aswdir_s", "Direct [W/m²]", "#ffd900"),
     ("aswdifd_s", "Diffuse [W/m²]", "#f70eff"),
-    ("t_2m", "Temperature [K]", "#0077ff"),
-    ("Mittelwertleistung [W]", "Average power [W]", "#d62728"),
-    ("solar_elevation_deg", "Solar elevation [°]", "#777777"),
+    ("t_2m", "Temp. [K]", "#0077ff"),
+    ("Mittelwertleistung [W]", "Power [W]", "#d62728"),
+    ("solar_elevation_deg", "Solar elev. [°]", "#777777"),
 ]
 
 

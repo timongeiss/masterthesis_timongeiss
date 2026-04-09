@@ -11,12 +11,6 @@ DROP_INITIAL_DAYS = 4
 DROP_FINAL_DAYS = 2
 
 # Farben
-PLOT_COLORS_SINGLE = {
-    "face": "#a6cee3",
-    "edge": "#1f78b4",
-    "median": "#e31a1c",
-    "line": "#ff7f00",
-}
 PLOT_COLORS_COMBINED = {
     "all": {"face": "#a6cee3", "edge": "#000000"},
     "intra_day": {"face": "#b2df8a", "edge": "#000000"},
@@ -94,19 +88,6 @@ def add_samples(bucket, errors):
     bucket["count"]   += float(errs.size)             # Anzahl N
 
 
-def time_labels_15min(n):
-    """
-    Erzeugt HH:MM-Labels in 15-Minuten-Schritten ohne Tageswechsel.
-    """
-    labels = []                                           # Ergebnisliste
-    for i in range(n):                                    # für jeden Schritt
-        total_minutes = i * 15                            # Minuten seit 00:00
-        h = total_minutes // 60                           # ganze Stunden
-        m = total_minutes % 60                            # Restminuten
-        labels.append(f"{h:02d}:{m:02d}")                # Format HH:MM
-    return labels
-
-
 def ensure_array(v):
     """
     Gibt bei leerer Liste ein [NaN] zurück, damit Boxplot nicht laggt.
@@ -138,23 +119,6 @@ def as_float_series(s):
 # PLOT-HILFE
 # ============================================================
 
-def style_single_boxplot(bp):
-    # Boxen einfärben (Fläche + Rand)
-    for box in bp["boxes"]:
-        box.set(facecolor=PLOT_COLORS_SINGLE["face"],
-                alpha=0.5,
-                edgecolor=PLOT_COLORS_SINGLE["edge"])
-    # Whisker einfärben
-    for w in bp["whiskers"]:
-        w.set(color=PLOT_COLORS_SINGLE["edge"])
-    # Kappen einfärben
-    for c in bp["caps"]:
-        c.set(color=PLOT_COLORS_SINGLE["edge"])
-    # Medianlinie einfärben
-    for m in bp["medians"]:
-        m.set(color=PLOT_COLORS_SINGLE["median"])
-
-
 def style_combined_boxplot(bp, group):
     face = PLOT_COLORS_COMBINED[group]["face"]            # Gruppenfarbe (Fläche)
     edge = PLOT_COLORS_COMBINED[group]["edge"]            # Gruppenfarbe (Rand)
@@ -166,58 +130,6 @@ def style_combined_boxplot(bp, group):
         c.set(color=edge)                                 # Kappen einfärben
     for m in bp["medians"]:
         m.set(color=edge)                                 # Median einfärben
-
-
-
-
-# ===== Einzeltag, nMAE =====
-
-def plot_day_group_boxplots(day_str, group_name, per_step_values, out_dir):
-    """
-    Boxplots pro 15-Min-Schritt für einen Tag und eine Gruppe (nMAE).
-    """
-    n_steps = 96                                          # 96 Viertelstunden pro Tag
-    data = [ensure_array(vs) for vs in per_step_values]   # leere Listen zu [NaN] machen
-    means = np.array([                                     # Mittel pro Schritt (NaN-sicher)
-        np.nanmean(d) if np.any(~np.isnan(d)) else np.nan
-        for d in data
-    ])
-
-    fig, ax = plt.subplots(figsize=(24, 8), dpi=150)      # Figure/Achse anlegen
-    bp = ax.boxplot(                                      # Boxplot zeichnen
-        data,
-        positions=np.arange(n_steps),                     # 0..95 Positionen
-        widths=0.6,                                       # Boxbreite
-        showfliers=False,                                 # Ausreißer ausblenden
-        patch_artist=True,                                # Flächen einfärbbar
-    )
-    style_single_boxplot(bp)                              # Boxplot-Stil anwenden
-    ax.plot(                                              # Linienplot der Mittelwerte
-        np.arange(n_steps),
-        means,
-        color=PLOT_COLORS_SINGLE["line"],
-        marker="o",
-        markersize=3,
-        linewidth=1,
-        label="Mean per step",
-    )
-    ax.set_title(f"{day_str} - {group_name} (normalized to 9.72 kWp)") # Titel
-    ax.set_ylabel("nMAE")                                 # y-Label
-    ax.set_xlabel("Time of day (15-min steps)")           # x-Label
-    ax.set_xticks(np.arange(n_steps))                     # x-Ticks setzen
-    ax.set_xticklabels(time_labels_15min(n_steps),        # Tick-Labels 00:00..23:45
-                       rotation=90)
-    ax.grid(axis="y", linestyle="--", alpha=0.4)          # horizontales Grid
-    ax.legend()                                           # Legende anzeigen
-    plt.tight_layout()                                    # Layout optimieren
-
-    os.makedirs(out_dir, exist_ok=True)                   # Zielordner anlegen (falls nötig)
-    out_path = os.path.join(out_dir,                      # Dateipfad erzeugen
-                            f"boxplot_{day_str}_{group_name}.png")
-    plt.savefig(out_path)                                 # Plot speichern
-    plt.close(fig)                                        # Figure schließen (Speicher frei)
-    return out_path                                       # Pfad zurückgeben
-
 # ===== Über mehrere Tage, nMAE =====
 
 def plot_combined_daily_boxes_across_days(day_labels, values_all, values_intra, values_da, out_dir):
@@ -268,55 +180,6 @@ def plot_combined_daily_boxes_across_days(day_labels, values_all, values_intra, 
     plt.savefig(out_path)                                  # Plot speichern
     plt.close(fig)                                         # Figure schließen
     return out_path                                        # Pfad zurückgeben
-
-# ===== Einzeltag, nRMSE =====
-
-def plot_day_group_boxplots_nrmse(day_str, group_name, per_step_values, out_dir):
-    """
-    Boxplots pro 15-Min-Schritt für einen Tag und eine Gruppe (nRMSE).
-    """
-    n_steps = 96                                          # 96 Viertelstunden
-    data = [ensure_array(vs) for vs in per_step_values]   # leere Listen absichern
-    means = np.array([                                     # Mittel pro Schritt
-        np.nanmean(d) if np.any(~np.isnan(d)) else np.nan
-        for d in data
-    ])
-
-    fig, ax = plt.subplots(figsize=(24, 8), dpi=150)      # Figure/Achse
-    bp = ax.boxplot(                                      # Boxplot zeichnen
-        data,
-        positions=np.arange(n_steps),
-        widths=0.6,
-        showfliers=False,
-        patch_artist=True,
-    )
-    style_single_boxplot(bp)                              # Stil anwenden
-    ax.plot(                                              # Mittelwerte als Linie
-        np.arange(n_steps),
-        means,
-        color=PLOT_COLORS_SINGLE["line"],
-        marker="o",
-        markersize=3,
-        linewidth=1,
-        label="Mean per step",
-    )
-    ax.set_title(f"{day_str} - {group_name} (normalized to 9.72 kWp) - nRMSE") # Titel
-    ax.set_ylabel("nRMSE")                               # y-Label
-    ax.set_xlabel("Time of day (15-min steps)")          # x-Label
-    ax.set_xticks(np.arange(n_steps))                    # x-Ticks
-    ax.set_xticklabels(time_labels_15min(n_steps),       # Tick-Labels
-                       rotation=90)
-    ax.grid(axis="y", linestyle="--", alpha=0.4)         # Grid
-    ax.legend()                                          # Legende
-    plt.tight_layout()                                   # Layout
-
-    os.makedirs(out_dir, exist_ok=True)                  # Ordner anlegen
-    out_path = os.path.join(out_dir,                     # Dateipfad
-                            f"boxplot_{day_str}_{group_name}_nRMSE.png")
-    plt.savefig(out_path)                                # speichern
-    plt.close(fig)                                       # schließen
-    return out_path                                      # Pfad zurück
-
 
 # ===== Über mehrere Tage, nRMSE =====
 
@@ -406,30 +269,6 @@ def main():
 
     # ----- Sammelstrukturen anlegen -------
 
-    # Sammelstrukturen pro 15-Minuten-Schritt (nMAE)
-    # Erstellt für jeden Zieltag d ein eigenes Wörterbuch.
-    # Dieses Wörterbuch hat 3 Schlüssel: Jeder dieser Schlüssel enthält eine Liste mit 96 leeren Listen da Ein Tag 24 h × 4 = 96 Viertelstunden
-    # Jede der 96 Listen sammelt später die Fehlerwerte für genau diesen 15-Minuten-Zeitschritt über alle verfügbaren Modelle
-    
-    per_step_collectors = {
-        d: {
-            "all": [list() for _ in range(96)],            # 96 leere Listen pro Gruppe
-            "intra_day": [list() for _ in range(96)],
-            "day_ahead": [list() for _ in range(96)],
-        }
-        for d in days
-    }
-    
-    # Sammelstrukturen pro 15-Minuten-Schritt nRMSE
-    per_step_collectors_rmse = {
-        d: {
-            "all": [list() for _ in range(96)],
-            "intra_day": [list() for _ in range(96)],
-            "day_ahead": [list() for _ in range(96)],
-        }
-        for d in days
-    }
-    
     # Per-Tag-Samples (für Tages-Boxplots über Tage, nMAE)
     # nicht nach Viertelstunden getrennt, sondern pro Tag nur eine Liste geführt. Diese Struktur sammelt alle Fehlerwerte eines Tages
     per_day_values = {d: {"all": [], "intra_day": [], "day_ahead": []} for d in days}
@@ -486,12 +325,10 @@ def main():
 
             vt_d = pd.to_datetime(vt.values[mask_day])     # Zeitstempel für die nAE-Werte
 
-            # Einsortieren je 15-Min-Slot (00:00–23:45 → 96 Slots)
+            # Tageswerte sammeln (nMAE)
             for ts, val in zip(vt_d, nAE_vals):
                 if np.isnan(val):                          # NaN überspringen
                     continue
-                step = int(ts.hour) * 4 + int(ts.minute) // 15  # berechnet den Viertelstunden-Index im Tag 00:00 → 0, 00:15 → 1, …, 23:45 → 95.
-                per_step_collectors[d]["all"][step].append(float(val))  # pro Schritt sammeln
                 per_day_values[d]["all"].append(float(val))             # pro Tag sammeln
 
             # Intra-day/Day-ahead trennen (nur wenn run_date vorhanden)
@@ -512,8 +349,6 @@ def main():
                     for ts, val in zip(vt_i, nAE_intra):
                         if np.isnan(val):
                             continue
-                        step = int(ts.hour) * 4 + int(ts.minute) // 15
-                        per_step_collectors[d]["intra_day"][step].append(float(val))
                         per_day_values[d]["intra_day"].append(float(val))
 
                 # Day-ahead sammeln
@@ -527,8 +362,6 @@ def main():
                     for ts, val in zip(vt_da, nAE_da):
                         if np.isnan(val):
                             continue
-                        step = int(ts.hour) * 4 + int(ts.minute) // 15
-                        per_step_collectors[d]["day_ahead"][step].append(float(val))
                         per_day_values[d]["day_ahead"].append(float(val))
                         
                         
@@ -542,12 +375,10 @@ def main():
             else:
                 nRMSE_vals = np.full(np.count_nonzero(mask_day), np.nan)
 
-            # nRMSE für „all“ einsortieren
+            # Tageswerte sammeln (nRMSE)
             for ts, val in zip(vt_d, nRMSE_vals):
                 if np.isnan(val):
                     continue
-                step = int(ts.hour) * 4 + int(ts.minute) // 15
-                per_step_collectors_rmse[d]["all"][step].append(float(val))
                 per_day_values_rmse[d]["all"].append(float(val))
 
             # nRMSE für intra/day-ahead (nur wenn run_date vorhanden)
@@ -560,8 +391,6 @@ def main():
                     for ts, val in zip(vt_i, nRMSE_intra):
                         if np.isnan(val):
                             continue
-                        step = int(ts.hour) * 4 + int(ts.minute) // 15
-                        per_step_collectors_rmse[d]["intra_day"][step].append(float(val))
                         per_day_values_rmse[d]["intra_day"].append(float(val))
 
                 if np.any(day_ahead_mask):
@@ -572,8 +401,6 @@ def main():
                     for ts, val in zip(vt_da, nRMSE_da):
                         if np.isnan(val):
                             continue
-                        step = int(ts.hour) * 4 + int(ts.minute) // 15
-                        per_step_collectors_rmse[d]["day_ahead"][step].append(float(val))
                         per_day_values_rmse[d]["day_ahead"].append(float(val))
 
 
@@ -608,15 +435,6 @@ def main():
     out_summary = artifacts_dir / "physical_model_testday_metrics.csv"
     summary.to_csv(out_summary, index=False, decimal=",")  # CSV schreiben
 
-    # Plots nach Tag und Gruppe (nMAE)
-    box_dir = os.path.join(export_dir, "boxplots_by_day")  # Zielordner
-    for d in days:
-        day_str = d.strftime("%Y-%m-%d")                   # YYYY-MM-DD
-        for group in ("all", "intra_day", "day_ahead"):    # drei Gruppen
-            plot_day_group_boxplots(day_str, group,        # Plot erzeugen
-                                    per_step_collectors[d][group],
-                                    box_dir)
-
     # Kombinierte Tages-Boxplots (nMAE)
     day_labels = [d.strftime("%Y-%m-%d") for d in days]    # Labels für x-Achse
     across_dir = os.path.join(export_dir, "boxplots_days_across")  # Zielordner
@@ -635,19 +453,9 @@ def main():
                                                 values_all_r, values_intra_r, values_da_r,
                                                 across_dir)
 
-    # Plots nach Tag und Gruppe (nRMSE)
-    box_dir_rmse = os.path.join(export_dir, "boxplots_by_day_nrmse")
-    for d in days:
-        day_str = d.strftime("%Y-%m-%d")
-        for group in ("all", "intra_day", "day_ahead"):
-            plot_day_group_boxplots_nrmse(day_str, group, # Plot erzeugen
-                                          per_step_collectors_rmse[d][group],
-                                          box_dir_rmse)
-
     # Kurzer Abschluss
     print(f"Done. Files processed: {len(csv_paths)} (skipped: {skipped}).")  # Status
     print(f"Exported CSV: {out_summary}")                                     # Pfad CSV
-    print(f"Per-day plots: {box_dir}")                                        # Ordner nMAE Tag
     print(f"Combined daily plot (nMAE): {os.path.join(across_dir, 'boxplot_days_combined_nMAE.png')}") # Kombiniert
     print(f"Combined daily plot (nRMSE): {os.path.join(across_dir, 'boxplot_days_combined_nRMSE.png')}")# Kombiniert
 

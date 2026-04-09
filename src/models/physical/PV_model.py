@@ -4,7 +4,11 @@ import pvlib
 import pandas as pd
 import numpy as np
 import logging
+import warnings
 #from datetime import datetime
+
+_DESOTO_CACHE = {}
+DNI_PHYSICAL_CAP_FACTOR = 1.2
 
 
 #-------------------------------------
@@ -151,6 +155,26 @@ def calculate_dni_extra(df_weather: pd.DataFrame):
     return df_weather
 
 
+def apply_physical_dni_cap(df_weather: pd.DataFrame, cap_factor: float = DNI_PHYSICAL_CAP_FACTOR):
+    """
+    Begrenzt DNI auf einen physikalisch plausiblen Bereich relativ zu dni_extra.
+    Das vermeidet Horizon-Ausreisser durch aswdir_s / cos(zenith) nahe 90°.
+    """
+    dni = pd.to_numeric(df_weather["dni"], errors="coerce").to_numpy(dtype=float)
+    dni_cap = (cap_factor * pd.to_numeric(df_weather["dni_extra"], errors="coerce")).to_numpy(dtype=float)
+
+    valid_cap = np.isfinite(dni_cap)
+    clipped_high = valid_cap & (dni > dni_cap)
+    if np.any(clipped_high):
+        logging.info(
+            f"Clipped {int(np.sum(clipped_high))} DNI points above {cap_factor:.2f} * dni_extra."
+        )
+        dni = np.where(clipped_high, dni_cap, dni)
+
+    df_weather["dni"] = pd.Series(dni, index=df_weather.index).clip(lower=0).fillna(0.0)
+    return df_weather
+
+
 
 
 
@@ -172,6 +196,9 @@ def preprocess_weather(df_weather: pd.DataFrame, PVLIBlocation: pvlib.location.L
 
     # Extraterrestrial dni berechnen
     df_weather = calculate_dni_extra(df_weather)
+
+    # Numerische Horizon-Ausreisser in der DNI-Reprojektion begrenzen
+    df_weather = apply_physical_dni_cap(df_weather)
 
     return df_weather, PVLIBsolpos
 
@@ -338,88 +365,91 @@ def calculate_stc(modultyp:pd.DataFrame):
 
 
 
+def _is_physical_desoto_fit(params: dict) -> bool:
+    """
+    Basale Plausibilitätsprüfung der De Soto Parameter.
+    """
+    required = ["I_L_ref", "I_o_ref", "R_s", "R_sh_ref", "a_ref"]
+    values = [params.get(k, np.nan) for k in required]
+    if not np.all(np.isfinite(values)):
+        return False
+    return (
+        params["I_L_ref"] > 0
+        and params["I_o_ref"] > 0
+        and params["R_s"] >= 0
+        and params["R_sh_ref"] > 0
+        and params["a_ref"] > 0
+    )
+
+
 def calculate_desotocell(modultyp:pd.DataFrame, stc_alpha_sc: float, stc_beta_voc: float):
     """
     Ermittelt die elektrischen Modellparameter eines PV-Moduls anhand des De Soto Single-Diode-Modells.
-    Diese Funktion nutzt typische Datenblattwerte eines PV-Moduls bei STC, um die Parameter für ein physikalisch fundiertes I-V-Kennlinienmodell (Ein-Dioden-Modell) zu berechnen.
-    Die Methode folgt dem De Soto-Verfahren (IEC-konform) und basiert auf der Lösung nichtlinearer Gleichungssysteme mit `scipy.optimize.root`.
-    - `alpha_sc` und `beta_voc` müssen in absoluten Einheiten angegeben werden(z. B. A/K bzw. V/K, nicht %/K).
-    - Das Ergebnis dient als Eingang für `pvlib.pvsystem.calcparams_desoto`,um die Modulparameter bei beliebigen Bedingungen (Irradiance, Temperatur)zu berechnen.
-    - Das Modell liefert eine präzisere Leistungsbeschreibung als das PVWatts-oder Sandia-Modell und ist für Simulationsreihen geeignet.
-
-    Rückgabe
-    model_params : dict
-        Ein Dictionary mit den berechneten De Soto Modellparametern:
-        - I_L_ref  : Lichtstrom bei Referenzbedingungen [A]
-        - I_o_ref  : Sättigungsstrom der Diode [A]
-        - R_s      : Serienwiderstand [Ω]
-        - R_sh_ref : Shuntwiderstand [Ω]
-        - a_ref    : modifizierter Idealfaktor (n·Ns·V_th) [V]
-        - alpha_sc : Kurzschlussstrom-Koeffizient [A/K]
-        - EgRef    : Bandlücke des Halbleiters [eV]
-        - dEgdT    : Temperaturabhängigkeit der Bandlücke [1/K]
-        - irrad_ref: Referenz-Einstrahlung [W/m²]
-        - temp_ref : Referenz-Temperatur [°C]
-
-
-
-    Wichtiger Hinweis zu `cells_in_series`
-    ---------------------------------------
-    Die Anzahl der in Serie geschalteten Zellen (cells_in_series) beeinflusst das Modell über den sog.
-    Idealfaktor-Term (a_ref = n · Ns · V_th) und ist damit entscheidend für die Spannungslage der simulierten
-    I/V-Kurve. In vielen modernen PV-Modulen ist diese Angabe jedoch nicht klar aus dem Datenblatt ersichtlich,
-    insbesondere bei:
-    - Shingled-Modulen,
-    - Halbzellen (Half-Cut-Module),
-    - Parallelschaltung mehrerer Zellstrings.
-
-    Wird kein plausibler Wert verwendet, schlägt die Modellanpassung (fit_desoto) häufig fehl.
-
-    In diesem Fall kann entweder:
-    - eine Zellanzahl aus der Leerlaufspannung (V_oc / 0.6…0.7 V) geschätzt werden,
-    - oder ein robustes Retry-Verfahren implementiert werden, das cells_in_series sukzessive reduziert.
-
-    Wie kritisch ist eine falsche Angabe?
-    - Für die typische Anwendung in Ertrags- oder AC-Leistungsprognosen (wie in diesem Modell):
-        Kein großes Problem, solange das Modell mit `calcparams_desoto()` und `singlediode()` korrekt
-        weiterverwendet wird und die STC-MPP-Werte realistisch sind. Die Leistung wird ohnehin am MPP
-        skaliert.
-    - Für detaillierte Kennlinienanalysen (z. B. bei Teilverschattung, Mismatch, Fehlerdiagnose):
-        Kritisch – da die Modellierung des Spannungsteils der I/V-Kurve stark vom a_ref-Term abhängt
-        und eine realistische Zellanzahl notwendig ist.
+    Diese Funktion nutzt typische Datenblattwerte eines PV-Moduls bei STC, um die Parameter
+    fuer ein physikalisch fundiertes I-V-Kennlinienmodell (Ein-Dioden-Modell) zu berechnen.
+    Die Methode folgt dem De Soto-Verfahren (IEC-konform) und basiert auf der Loesung
+    nichtlinearer Gleichungssysteme mit `scipy.optimize.root`.
     """
 
-    max_retries = 120
-    current_retries = 0
+    cache_key = (
+        float(modultyp["v_mp"]),
+        float(modultyp["i_mp"]),
+        float(modultyp["v_oc"]),
+        float(modultyp["i_sc"]),
+        float(stc_alpha_sc),
+        float(stc_beta_voc),
+    )
+    if cache_key in _DESOTO_CACHE:
+        return _DESOTO_CACHE[cache_key]
 
-    while current_retries <= max_retries:
-        cells = max_retries - current_retries
+    max_cells = 120
+    best_nonphysical = None
+
+    for cells in range(max_cells, 0, -1):
         try:
-            PVLIBdesotocell = pvlib.ivtools.sdm.fit_desoto(
-                                                v_mp = modultyp["v_mp"],
-                                                i_mp = modultyp["i_mp"],
-                                                v_oc = modultyp["v_oc"],
-                                                i_sc = modultyp["i_sc"],
-                                                alpha_sc = stc_alpha_sc,
-                                                beta_voc = stc_beta_voc,
-                                                cells_in_series = cells,
-                                                EgRef = 1.121,
-                                                dEgdT = -0.0002677,
-                                                temp_ref = 25,
-                                                irrad_ref = 1000
-                                            )
-            break
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                result = pvlib.ivtools.sdm.fit_desoto(
+                    v_mp=modultyp["v_mp"],
+                    i_mp=modultyp["i_mp"],
+                    v_oc=modultyp["v_oc"],
+                    i_sc=modultyp["i_sc"],
+                    alpha_sc=stc_alpha_sc,
+                    beta_voc=stc_beta_voc,
+                    cells_in_series=cells,
+                    EgRef=1.121,
+                    dEgdT=-0.0002677,
+                    temp_ref=25,
+                    irrad_ref=1000,
+                )
+            params = result[0]
+
+            if _is_physical_desoto_fit(params):
+                logging.info(f"Using De Soto fit with cells_in_series = {cells}")
+                _DESOTO_CACHE[cache_key] = params
+                return params
+
+            if best_nonphysical is None:
+                best_nonphysical = (cells, params)
+            logging.info(
+                f"Discarding non-physical De Soto fit at cells_in_series = {cells} "
+                f"(R_s={params.get('R_s')}, R_sh_ref={params.get('R_sh_ref')}, a_ref={params.get('a_ref')})."
+            )
 
         except RuntimeError as e:
             logging.info(f"Error: {e}")
             logging.info(f"Retrying with cells_in_series = {cells - 1}")
-            current_retries += 1
 
-    if current_retries > max_retries:
-        logging.info("Parameter estimation failed even after reducing cells_in_series to 0.")
-        return None  # Rückgabe wenn alles fehlschlägt
+    if best_nonphysical is not None:
+        cells, params = best_nonphysical
+        logging.warning(
+            "No physical De Soto fit found. Falling back to non-physical fit "
+            f"with cells_in_series = {cells}."
+        )
+        _DESOTO_CACHE[cache_key] = params
+        return params
 
-    return PVLIBdesotocell[0]
+    raise RuntimeError("Parameter estimation failed for all cells_in_series candidates.")
 
 
 # marked
@@ -507,14 +537,31 @@ def calculate_mpp(PVLIBdesotomodule: pd.DataFrame):
     # (photocurrent, saturation_current, resistance_series, resistance_shunt, nNsVth)
     phot, sat, rs, rsh, nns_vth = PVLIBdesotomodule
 
-    PVLIBmpp = pvlib.pvsystem.max_power_point(
-        photocurrent=phot,
-        saturation_current=sat,
-        resistance_series=rs,
-        resistance_shunt=rsh,
-        nNsVth=nns_vth,
-        method='newton'
-    )
+    def _solve(method: str) -> pd.DataFrame:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            return pvlib.pvsystem.singlediode(
+                photocurrent=phot,
+                saturation_current=sat,
+                resistance_series=rs,
+                resistance_shunt=rsh,
+                nNsVth=nns_vth,
+                method=method,
+            )[["i_mp", "v_mp", "p_mp"]]
+
+    try:
+        PVLIBmpp = _solve("lambertw")
+    except ValueError as e:
+        if "upper >= lower is required" not in str(e):
+            raise
+        logging.warning("MPP lambertw failed with 'upper >= lower'; applying brentq fallback.")
+        PVLIBmpp = _solve("brentq")
+
+    # Physically, MPP values cannot be negative or non-finite.
+    PVLIBmpp = PVLIBmpp.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    PVLIBmpp["i_mp"] = PVLIBmpp["i_mp"].clip(lower=0)
+    PVLIBmpp["v_mp"] = PVLIBmpp["v_mp"].clip(lower=0)
+    PVLIBmpp["p_mp"] = PVLIBmpp["p_mp"].clip(lower=0)
 
     return PVLIBmpp
 
@@ -574,4 +621,5 @@ def calculate_acpower_from_pdc(pdc: pd.Series, inverter: dict):
         eta_inv_nom=inverter["eta_max"],
     )
     return ACpower
+
 

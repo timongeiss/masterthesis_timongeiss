@@ -1,15 +1,16 @@
 import sys
 from pathlib import Path
-from typing import List, Optional, Dict, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 import pandas as pd
 
+
 # ==========================================
-# Plot-Konfiguration (wie im Einzelskript)
+# Plot configuration
 # ==========================================
 PLOT_CONFIG = {
     "figsize": (11.7, 8.3),
@@ -24,59 +25,71 @@ PLOT_CONFIG = {
     "xtick_density": 12,
 }
 
-# Optional oberer Konfig‑Block für einfachen Start ohne CLI
-# Datum als String im Format yyyymmdd oder yyyy-mm-dd angeben
-# Beispiel: "2025-07-05" oder "20250705". Leer lassen, um CLI zu verwenden.
-SELECTED_DAY: Optional[str] = ""
-# Optionaler Ausgabepfad als PNG; leer lassen für interaktive Anzeige
-SELECTED_OUTPUT: Optional[str] = ""
-# Optional: Pfad zum Exports‑Ordner überschreiben; leer -> "exports"
+# Model selection in header (no CLI override).
+SELECTED_MODEL_OUTPUT: str = "source_output"
+
+# Optional override for input directory; keep empty to use data/results/<SELECTED_MODEL_OUTPUT>.
 SELECTED_EXPORTS_DIR: Optional[str] = ""
-# Startdatum fuer die Nummerierung (YYYY-MM-DD): dieser Tag wird Tag 1
+
+# Day indexing starts at this date; this date is day 1.
 DAY_INDEX_START_DATE: str = "2025-07-07"
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_DIR = PROJECT_ROOT / "data" / "results" / "physical_output"
-OUTPUT_DIR = PROJECT_ROOT / "reports" / "physical"
+RESULTS_ROOT = PROJECT_ROOT / "data" / "results"
+REPORTS_ROOT = PROJECT_ROOT / "reports"
 
-# Boxplot‑Reihen (Zeitreihen, die je Lauf unterschiedlich sind)
+ALLOWED_MODEL_OUTPUTS = {"source_output", "target_output", "transfer_output"}
+
+# MLP feature series to plot as boxplots.
 BOXPLOT_SERIES = [
-    ("t_2m", "Temp. [K]", "#0077ff"),
-    ("aswdir_s", "Direct [W/m^2]", "#ffd900"),
-    ("aswdifd_s", "Diffuse [W/m^2]", "#f70eff"),
+    ("aswdir_s_norm", "Direct (norm)", "#ffd900"),
+    ("aswdifd_s_norm", "Diffuse (norm)", "#f70eff"),
+    ("t2m_norm", "Temp. (norm)", "#0077ff"),
 ]
 
-# Leistungs‑Spaltenkandidaten
-PV_COL_CANDS = ["pv_power_W", "pv_power_w", "pv_power", "ac_power", "ac_power_w"]
-
-# Mittelwertleistung (real) – identisch über alle Läufe
-AVG_POWER_CANDS = [
-    "Mittelwertleistung [W]",
-    "mittelwertleistung [w]",
-    "mean_power",
-    "avg_power",
-]
-
-# Sonnenhöhe – identisch über alle Läufe
+PV_COL_CANDS = ["y_pred"]
+AVG_POWER_CANDS = ["y_true"]
 SOL_ELEV_CANDS = ["solar_elevation_deg", "solar_elevation", "sol_elev_deg"]
 
 
+def _to_float(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series.astype(str).str.replace(",", ".", regex=False), errors="coerce")
+
+
+def model_tag_from_output(model_output: str) -> str:
+    if model_output not in ALLOWED_MODEL_OUTPUTS:
+        allowed = ", ".join(sorted(ALLOWED_MODEL_OUTPUTS))
+        raise ValueError(
+            f"Unsupported SELECTED_MODEL_OUTPUT='{model_output}'. Allowed values: {allowed}."
+        )
+    return model_output.replace("_output", "")
+
+
 def list_exports(directory: Path) -> List[Path]:
-    files = sorted(directory.glob("*_with_pv_power.csv"))
-    if files:
-        return files
-    return sorted(directory.glob("*.csv"))
+    return sorted(directory.rglob("*.csv"))
 
 
 def load_data(path: Path) -> pd.DataFrame:
-    """CSV laden, Zeit parsen, Dezimalkommas in Zahlen konvertieren, sortiert zurückgeben."""
-    df = pd.read_csv(path, parse_dates=["valid_time"])  # parse valid_time
-    # Strings -> Zahlen (Komma als Dezimaltrennzeichen erlauben)
-    for col in df.columns:
-        if df[col].dtype == "object":
-            try:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", "."), errors="coerce")
-            except Exception:
-                pass
+    df = pd.read_csv(path, parse_dates=["valid_time"])
+    required = {"valid_time"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns in '{path}': {sorted(missing)}")
+
+    numeric_candidates = [
+        "y_true",
+        "y_pred",
+        "solar_elevation_deg",
+        "solar_elevation",
+        "sol_elev_deg",
+        "aswdir_s_norm",
+        "aswdifd_s_norm",
+        "t2m_norm",
+    ]
+    for col in numeric_candidates:
+        if col in df.columns:
+            df[col] = _to_float(df[col])
+
     return df.sort_values("valid_time").reset_index(drop=True)
 
 
@@ -89,31 +102,7 @@ def find_col(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
     return None
 
 
-def parse_day_arg(raw: str) -> pd.Timestamp:
-    """Akzeptiert yyyymmdd oder yyyy-mm-dd und gibt UTC‑naiven Timestamp (Mitternacht) zurück."""
-    s = raw.strip()
-    if len(s) == 8 and s.isdigit():
-        return pd.to_datetime(f"{s[0:4]}-{s[4:6]}-{s[6:8]}")
-    # Fallback: pandas parsen lassen
-    ts = pd.to_datetime(s, errors="coerce")
-    if pd.isna(ts):
-        raise ValueError(f"Ungültiges Datumsformat: '{raw}'. Erwarte yyyymmdd oder yyyy-mm-dd.")
-    return ts.normalize()
-
-
-def collect_day_frames_with_paths(exports_dir: Path, day: pd.Timestamp) -> List[tuple[Path, pd.DataFrame]]:
-    """Alle Tages-DataFrames inklusive ihrer Quelldatei zurückgeben."""
-    out: List[tuple[Path, pd.DataFrame]] = []
-    for fp in list_exports(exports_dir):
-        df = load_data(fp)
-        mask = df["valid_time"].dt.date == day.date()
-        df_day = df.loc[mask].copy()
-        if not df_day.empty:
-            out.append((fp, df_day))
-    return out
-
-def list_available_days(frames_with_paths: List[tuple[Path, pd.DataFrame]]) -> List[pd.Timestamp]:
-    """Alle verfuegbaren Tage ueber alle geladenen Exporte sammeln."""
+def list_available_days(frames_with_paths: List[Tuple[Path, pd.DataFrame]]) -> List[pd.Timestamp]:
     days = set()
     for _path, df in frames_with_paths:
         if "valid_time" not in df.columns:
@@ -124,11 +113,10 @@ def list_available_days(frames_with_paths: List[tuple[Path, pd.DataFrame]]) -> L
 
 
 def collect_day_frames_from_loaded(
-    frames_with_paths: List[tuple[Path, pd.DataFrame]],
+    frames_with_paths: List[Tuple[Path, pd.DataFrame]],
     day: pd.Timestamp,
-) -> List[tuple[Path, pd.DataFrame]]:
-    """Tagesframes aus bereits geladenen Exporten filtern."""
-    out: List[tuple[Path, pd.DataFrame]] = []
+) -> List[Tuple[Path, pd.DataFrame]]:
+    out: List[Tuple[Path, pd.DataFrame]] = []
     for fp, df in frames_with_paths:
         mask = df["valid_time"].dt.normalize() == day.normalize()
         df_day = df.loc[mask].copy()
@@ -146,12 +134,11 @@ def build_time_union(frames: List[pd.DataFrame]) -> List[pd.Timestamp]:
 
 
 def expected_day_times(day: pd.Timestamp) -> List[pd.Timestamp]:
-    """96 Schritte im 15‑Minuten‑Raster für den Tag."""
     rng = pd.date_range(day.normalize(), day.normalize() + pd.Timedelta(days=1), freq="15min", inclusive="left")
     return [pd.Timestamp(t) for t in rng]
 
 
-def _cols_for(df: pd.DataFrame) -> tuple[Optional[str], Optional[str], Optional[str]]:
+def _cols_for(df: pd.DataFrame) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     pv_col = find_col(df, PV_COL_CANDS)
     avg_col = find_col(df, AVG_POWER_CANDS)
     sol_col = find_col(df, SOL_ELEV_CANDS)
@@ -159,10 +146,9 @@ def _cols_for(df: pd.DataFrame) -> tuple[Optional[str], Optional[str], Optional[
 
 
 def choose_complete_source(
-    frames_with_paths: List[tuple[Path, pd.DataFrame]],
+    frames_with_paths: List[Tuple[Path, pd.DataFrame]],
     exp_times: List[pd.Timestamp],
-) -> Optional[tuple[pd.DataFrame, str, str]]:
-    """Ersten Frame wählen, der für alle 96 Zeiten sowohl Mittelwertleistung als auch Sonnenhöhe hat."""
+) -> Optional[Tuple[pd.DataFrame, str, str]]:
     for _path, df in frames_with_paths:
         _pv, avg_col, sol_col = _cols_for(df)
         if avg_col is None or sol_col is None:
@@ -175,10 +161,9 @@ def choose_complete_source(
 
 
 def choose_best_partial_source(
-    frames_with_paths: List[tuple[Path, pd.DataFrame]],
+    frames_with_paths: List[Tuple[Path, pd.DataFrame]],
     exp_times: List[pd.Timestamp],
-) -> Optional[tuple[pd.DataFrame, str, str]]:
-    """Falls kein kompletter Frame vorhanden ist, den mit der größten Abdeckung nehmen."""
+) -> Optional[Tuple[pd.DataFrame, str, str]]:
     best = None
     best_count = -1
     for _path, df in frames_with_paths:
@@ -199,24 +184,23 @@ def collect_series_by_time(
     times: List[pd.Timestamp],
     col_name: str,
 ) -> List[List[float]]:
-    """Für jeden Zeitstempel alle Werte dieser Spalte über die Frames einsammeln (NaN ignorieren)."""
     buckets: List[List[float]] = [[] for _ in times]
-    # Schnellzugriff: pro Frame ein Dict valid_time->Wert
     lookups: List[Dict[pd.Timestamp, float]] = []
     for df in frames:
         series = df.set_index("valid_time")[col_name]
-        lm: Dict[pd.Timestamp, float] = {}
+        lookup: Dict[pd.Timestamp, float] = {}
         for t, v in series.items():
             try:
                 if pd.notna(v):
-                    lm[pd.Timestamp(t)] = float(v)
+                    lookup[pd.Timestamp(t)] = float(v)
             except Exception:
                 pass
-        lookups.append(lm)
+        lookups.append(lookup)
+
     for i, t in enumerate(times):
-        for lm in lookups:
-            if t in lm:
-                buckets[i].append(lm[t])
+        for lookup in lookups:
+            if t in lookup:
+                buckets[i].append(lookup[t])
     return buckets
 
 
@@ -227,52 +211,43 @@ def plot_day_boxplots(
     title: Optional[str] = None,
 ) -> plt.Figure:
     if not frames:
-        raise ValueError("Keine Tagesdaten gefunden (frames leer).")
+        raise ValueError("No day data found (frames is empty).")
 
-    # Zeitachse (Vereinigung aller Timestamps)
     times = build_time_union(frames)
     if not times:
-        raise ValueError("Keine Zeitstempel für diesen Tag gefunden.")
+        raise ValueError("No timestamps found for this day.")
     exp_times = expected_day_times(day)
 
-    frames_with_paths = list(zip(frame_paths or [Path("")]*len(frames), frames))
+    frames_with_paths = list(zip(frame_paths or [Path("")] * len(frames), frames))
     chosen = choose_complete_source(frames_with_paths, exp_times)
     if chosen is None:
         chosen = choose_best_partial_source(frames_with_paths, exp_times)
     if chosen is None:
-        raise ValueError("Keine Quelle mit vollständiger Solar elevation und Mittelwertleistung gefunden.")
+        raise ValueError("No source with valid solar elevation and y_true found.")
 
     src_df, avg_col, sol_col = chosen
     sol_series = src_df.set_index("valid_time")[sol_col]
 
-    # Nur Zeiten mit Solar elevation > 0 plotten
-    filtered_times = [t for t in times if pd.notna(sol_series.get(t)) and float(sol_series.get(t)) > 0]
+    filtered_times = [t for t in times if pd.notna(sol_series.get(t)) and float(sol_series.get(t)) > 0.0]
     if not filtered_times:
-        raise ValueError("Keine Zeitstempel mit Solar elevation > 0 gefunden.")
+        raise ValueError("No timestamps with solar elevation > 0 found.")
     times = filtered_times
     x = mdates.date2num(times)
 
-    # Plot‑Layout: Boxplots für BOXPLOT_SERIES + 1 Subplot für Leistung (Box + Linie)
-    # + 1 eigener Subplot für Sonnenhöhe
     n_sub = len(BOXPLOT_SERIES) + 2
     fig, axes = plt.subplots(n_sub, 1, figsize=PLOT_CONFIG["figsize"], dpi=PLOT_CONFIG["dpi"], sharex=True)
     if n_sub == 1:
         axes = [axes]
 
-    # Breite der Boxen (in Matplotlib‑Datums‑Einheiten = Tage)
-    # 15 min ≈ 15/60/24 Tage
     box_width = (15 / 60 / 24) * 0.8
 
-    # Hilfsfunktionen
-    def _style_ax(ax, ylabel: str):
+    def _style_ax(ax: plt.Axes, ylabel: str) -> None:
         ax.set_ylabel(ylabel, fontsize=PLOT_CONFIG["fontsize"])
         ax.tick_params(axis="y", labelsize=PLOT_CONFIG["fontsize"] - 1)
         if PLOT_CONFIG["grid"]:
             ax.grid(True, linestyle=PLOT_CONFIG["grid_style"], alpha=PLOT_CONFIG["grid_alpha"])
 
-    # Boxplots für die Wetter‑Eingänge
     for idx, (col_key, label, color) in enumerate(BOXPLOT_SERIES):
-        # Spaltenname robust feststellen (muss im ersten verfügbaren Frame existieren)
         col = None
         for df in frames:
             col = find_col(df, [col_key])
@@ -292,12 +267,11 @@ def plot_day_boxplots(
             whis=(5, 95),
             showfliers=False,
         )
-        # Farben anpassen
-        for patch in bp['boxes']:
+        for patch in bp["boxes"]:
             patch.set_facecolor(color)
             patch.set_alpha(0.35)
             patch.set_edgecolor(color)
-        for element in ['whiskers', 'caps', 'medians']:
+        for element in ["whiskers", "caps", "medians"]:
             for line in bp[element]:
                 line.set_color(color)
                 line.set_alpha(0.9)
@@ -305,19 +279,18 @@ def plot_day_boxplots(
 
         _style_ax(ax, label)
 
-    # Leistungs‑Subplot (Boxplots über Läufe + reale Mittelwertleistung als Linie)
     axp = axes[-2]
-    # PV‑Spalte suchen
     pv_col = None
     for df in frames:
         pv_col = find_col(df, PV_COL_CANDS)
         if pv_col is not None:
             break
-    pv_legend_handle = None
+
+    pred_legend_handle = None
     if pv_col is not None:
-        pv_buckets = collect_series_by_time(frames, times, pv_col)
+        pred_buckets = collect_series_by_time(frames, times, pv_col)
         bp = axp.boxplot(
-            pv_buckets,
+            pred_buckets,
             positions=x,
             widths=box_width,
             patch_artist=True,
@@ -325,40 +298,36 @@ def plot_day_boxplots(
             whis=(5, 95),
             showfliers=False,
         )
-        for patch in bp['boxes']:
+        for patch in bp["boxes"]:
             patch.set_facecolor("#0aa03b")
             patch.set_alpha(0.35)
             patch.set_edgecolor("#0aa03b")
-        for element in ['whiskers', 'caps', 'medians']:
+        for element in ["whiskers", "caps", "medians"]:
             for line in bp[element]:
                 line.set_color("#0aa03b")
                 line.set_alpha(0.9)
                 line.set_linewidth(0.8)
-        pv_legend_handle = Patch(facecolor="#0aa03b", edgecolor="#0aa03b", alpha=0.35, label="Power forecasts")
+        pred_legend_handle = Patch(facecolor="#0aa03b", edgecolor="#0aa03b", alpha=0.35, label="MLP y_pred")
 
-    # Reale Mittelwertleistung (Linie) aus der gewählten Quelle
     mean_line_handle = None
     s_avg = src_df.set_index("valid_time")[avg_col]
     y_avg = [float(s_avg.get(t)) if pd.notna(s_avg.get(t)) else None for t in times]
-    axp.plot(times, y_avg, color="#333333", lw=PLOT_CONFIG["linewidth"] + 0.5, label="Power [W]")
-    mean_line_handle = Line2D([0], [0], color="#333333", lw=PLOT_CONFIG["linewidth"] + 0.5, label="Power [W]")
+    axp.plot(times, y_avg, color="#333333", lw=PLOT_CONFIG["linewidth"] + 0.5, label="y_true")
+    mean_line_handle = Line2D([0], [0], color="#333333", lw=PLOT_CONFIG["linewidth"] + 0.5, label="y_true")
 
-    _style_ax(axp, "Power [W]")
+    _style_ax(axp, "Power (norm)")
 
-    # Legende für Leistungs‑Subplot
-    legend_handles = [h for h in (pv_legend_handle, mean_line_handle) if h is not None]
+    legend_handles = [h for h in (pred_legend_handle, mean_line_handle) if h is not None]
     if legend_handles:
-        axp.legend(handles=legend_handles, fontsize=PLOT_CONFIG["fontsize"], loc="upper left")
+        axp.legend(handles=legend_handles, fontsize=PLOT_CONFIG["fontsize"], loc="upper right")
 
-    # Eigener Subplot für Sonnenhöhe (Linie, identisch über Läufe)
     axe = axes[-1]
     y_sol = [float(sol_series.get(t)) if pd.notna(sol_series.get(t)) else None for t in times]
     axe.plot(times, y_sol, color="#777777", lw=PLOT_CONFIG["linewidth"])
-    axe.set_ylabel("Solar elev. [°]", fontsize=PLOT_CONFIG["fontsize"]) 
+    axe.set_ylabel("Solar elev. [deg]", fontsize=PLOT_CONFIG["fontsize"])
     axe.grid(True, linestyle=PLOT_CONFIG["grid_style"], alpha=PLOT_CONFIG["grid_alpha"])
     axe.tick_params(axis="y", labelsize=PLOT_CONFIG["fontsize"] - 1)
 
-    # X‑Achse konfigurieren
     xmin = min(times) - pd.Timedelta(days=PLOT_CONFIG["margin_frac"])
     xmax = max(times) + pd.Timedelta(days=PLOT_CONFIG["margin_frac"])
     axes[0].set_xlim(xmin, xmax)
@@ -377,40 +346,44 @@ def plot_day_boxplots(
         fontsize=PLOT_CONFIG["fontsize"] - 1,
     )
 
-    # Titel und Layout
-    ttl = title or f"Day boxplots for {day.date()} (N={len(frames)} runs)"
+    ttl = title or f"MLP day overview - {day.date()} (N={len(frames)} runs)"
     fig.suptitle(ttl, fontsize=PLOT_CONFIG["fontsize"] + 4)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
-
     return fig
 
 
 def main(argv: List[str]) -> None:
-    # Aufruf: python plot_physical_day_boxplots.py [exports_dir]
-    # Das Skript laeuft ueber alle verfuegbaren Tage und speichert pro Tag ein PNG.
-    dir_arg = (SELECTED_EXPORTS_DIR or "").strip()
-    if not dir_arg:
-        dir_arg = argv[1] if len(argv) > 1 else str(DEFAULT_DIR)
-    exports_dir = Path(dir_arg)
+    del argv  # no CLI options for model selection by design
+
+    model_output = SELECTED_MODEL_OUTPUT.strip()
+    model_tag = model_tag_from_output(model_output)
+
+    if SELECTED_EXPORTS_DIR and SELECTED_EXPORTS_DIR.strip():
+        exports_dir = Path(SELECTED_EXPORTS_DIR.strip())
+    else:
+        exports_dir = RESULTS_ROOT / model_output
+
+    output_dir = REPORTS_ROOT / model_tag
 
     export_files = list_exports(exports_dir)
     if not export_files:
-        raise FileNotFoundError(f"Keine CSV-Exporte in '{exports_dir}' gefunden.")
+        raise FileNotFoundError(f"No CSV exports found in '{exports_dir}'.")
 
     all_frames_with_paths = [(fp, load_data(fp)) for fp in export_files]
     all_days = list_available_days(all_frames_with_paths)
     if not all_days:
-        raise FileNotFoundError(f"Keine gueltigen Zeitstempel in '{exports_dir}' gefunden.")
+        raise FileNotFoundError(f"No valid timestamps found in '{exports_dir}'.")
+
     start_day = pd.Timestamp(DAY_INDEX_START_DATE).normalize()
     all_days = [d for d in all_days if d >= start_day]
     if not all_days:
-        raise FileNotFoundError(f"Keine Tage ab Startdatum {start_day.date()} in '{exports_dir}' gefunden.")
+        raise FileNotFoundError(f"No days from start date {start_day.date()} found in '{exports_dir}'.")
     if all_days[0] != start_day:
         raise FileNotFoundError(
-            f"Startdatum {start_day.date()} nicht in den Daten gefunden (erster verfuegbarer Tag: {all_days[0].date()})."
+            f"Start date {start_day.date()} not found in data (first available day: {all_days[0].date()})."
         )
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     saved = 0
     skipped = 0
@@ -418,29 +391,26 @@ def main(argv: List[str]) -> None:
         day_frames_with_paths = collect_day_frames_from_loaded(all_frames_with_paths, day)
         if not day_frames_with_paths:
             skipped += 1
-            print(f"Tag {day_index} ({day:%Y-%m-%d}) uebersprungen: keine Tagesdaten.")
+            print(f"Day {day_index} ({day:%Y-%m-%d}) skipped: no day data.")
             continue
 
         frame_paths = [p for p, _ in day_frames_with_paths]
         frames = [df for _, df in day_frames_with_paths]
-        title = f"Physical model day overview - {day.date()}"
+        title = f"{model_tag.capitalize()} MLP day overview - {day.date()}"
 
         try:
             fig = plot_day_boxplots(frames, frame_paths, day, title=title)
-            out_png = OUTPUT_DIR / f"{day_index}_day_boxplots_{day:%Y%m%d}.png"
+            out_png = output_dir / f"{day_index}_day_boxplots_{day:%Y%m%d}_{model_tag}.png"
             fig.savefig(out_png)
             plt.close(fig)
             saved += 1
-            print(f"Plot gespeichert: '{out_png}'.")
+            print(f"Saved plot: '{out_png}'.")
         except Exception as exc:
             skipped += 1
-            print(f"Tag {day_index} ({day:%Y-%m-%d}) uebersprungen: {exc}")
+            print(f"Day {day_index} ({day:%Y-%m-%d}) skipped: {exc}")
 
-    print(f"Fertig. Gespeichert: {saved}, uebersprungen: {skipped}, Tage gesamt: {len(all_days)}.")
+    print(f"Done. Saved: {saved}, skipped: {skipped}, total days: {len(all_days)}.")
+
 
 if __name__ == "__main__":
     main(sys.argv)
-
-
-
-
