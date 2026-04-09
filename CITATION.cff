@@ -4,9 +4,6 @@ authors:
   - family-names: "Geiss"
     given-names: "Timon"
     orcid: "https://orcid.org/0009-0001-0535-3847"
-  - family-names: "Houben"
-    given-names: "Nikolaus"
-    orcid: "https://orcid.org/0000-0001-7355-9815"
 title: "Economic comparison of PV forecasting strategies for data scarcity with NWP-based models and transfer learning - supplementary code"
 type: thesis
 thesis-type: "Master's Thesis"
