@@ -3,12 +3,11 @@ message: "If you use this work, please cite it as below."
 authors:
   - family-names: "Geiss"
     given-names: "Timon"
-    affiliation: "Student at TU Wien"
+    orcid: "https://orcid.org/0009-0001-0535-3847"
   - family-names: "Houben"
     given-names: "Nikolaus"
-    affiliation: "TU Wien, Institute of Energy Systems and Electrical Drives"
     orcid: "https://orcid.org/0000-0001-7355-9815"
-title: "Economic and Error Metric Evaluation of an NWP-based hybrid Transfer Learning Photovoltaic Forecasting Model"
+title: "Economic comparison of PV forecasting strategies for data scarcity with NWP-based models and transfer learning - supplementary code"
 type: thesis
 thesis-type: "Master's Thesis"
 year: 2026
