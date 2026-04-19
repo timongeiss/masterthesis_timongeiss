@@ -1,0 +1,15 @@
+optimization:
+  load_scaling_factor: 1
+  grid_fee_eur_per_mwh: 128.37
+  cycle_aging_omega_1_eur_per_mwh: 37.04
+  cycle_aging_omega_2_eur_per_mwh: 111.11
+  initial_soc_fraction: 0.5
+  terminal_soc_fraction: 0.5
+
+battery:
+  e_max_kwh: 10
+  e_min_kwh: 1
+  p_ch_max_kw: 4
+  p_dis_max_kw: 4
+  eta_ch: 0.95
+  eta_dis: 0.95
