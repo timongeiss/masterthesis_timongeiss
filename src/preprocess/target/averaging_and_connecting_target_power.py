@@ -26,7 +26,7 @@ PLOT_CONFIG = {
 SERIES = {"Mittelwertleistung [W]": ("Average power [W]", "#d62728")}
 
 
-def read_all_csv_files(prefix: str = "S917517808601355959525685-week-") -> pd.DataFrame:
+def read_all_csv_files(prefix: str = "Inverter_Target-") -> pd.DataFrame:
     """Liest alle Wochen-CSV-Dateien aus data/raw/target_label_space ein."""
     folder_path = PROJECT_ROOT / "data" / "raw" / "target_label_space"
     csv_files = sorted(f for f in folder_path.iterdir() if f.name.startswith(prefix) and f.suffix == ".csv")

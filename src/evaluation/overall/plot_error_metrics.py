@@ -3,6 +3,7 @@
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 import pandas as pd
 import yaml
 
@@ -12,6 +13,8 @@ PROJECT_ROOT = BASE_DIR.parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "artifacts"
 OUTPUT_DIR = PROJECT_ROOT / "reports" / "overall"
 CONFIG_PATH = PROJECT_ROOT / "configs" / "config_overall.yaml"
+CHRONO_START_DATE = pd.Timestamp("2025-07-07")
+CHRONO_END_DATE = pd.Timestamp("2025-10-05")  # day 91
 
 
 def load_config():
@@ -169,8 +172,8 @@ def plot_differences_single_model(model_csv: str, data: dict, save_path: Path) -
     plt.close(fig)
 
 
-def plot_metric_over_time_all_models(metric: str, data: dict, save_path: Path) -> None:
-    """Plot one metric over all test days with one subplot per model."""
+def plot_metrics_over_time_all_models(data: dict, save_path: Path) -> None:
+    """Plot both metrics in one DIN A4 figure with 8 stacked subplots in one column."""
 
     ordered_model_csvs = [
         "physical_model_testday_metrics.csv",
@@ -179,9 +182,17 @@ def plot_metric_over_time_all_models(metric: str, data: dict, save_path: Path) -
         "transfer_model_testday_metrics.csv",
     ]
     model_order = [csv_name for csv_name in ordered_model_csvs if csv_name in data]
+    tick_days = [1, 14, 28, 42, 56, 70, 84, 91]
+    tick_labels = [(CHRONO_START_DATE + pd.Timedelta(days=d - 1)).strftime("%d.%m.") for d in tick_days]
+    subplot_specs = [(csv_name, "nMAE") for csv_name in model_order] + [(csv_name, "nRMSE") for csv_name in model_order]
 
-    n_models = len(model_order)
-    fig, axes = plt.subplots(n_models, 1, figsize=(14, 12), sharex=True, sharey=True)
+    fig, axes = plt.subplots(
+        len(subplot_specs),
+        1,
+        figsize=(8.27, 11.69),  # DIN A4 portrait
+        dpi=300,
+        sharex=True,
+    )
     axes_flat = np.atleast_1d(axes)
 
     highlight_models = {
@@ -189,130 +200,157 @@ def plot_metric_over_time_all_models(metric: str, data: dict, save_path: Path) -
         "transfer_model_testday_metrics.csv",
     }
 
-    y_min, y_max = 0.0, 0.3
-
-    def plot_segment_mean(
-        ax,
-        x_seg: np.ndarray,
-        y_seg: np.ndarray,
-        color: str,
-        linestyle: str,
-        label_x: float,
-        label_ha: str,
-    ) -> None:
+    def plot_segment_median(
+        ax, x_seg: np.ndarray, y_seg: np.ndarray, color: str, linestyle: str
+    ) -> tuple[float, float, float] | None:
         valid = np.isfinite(y_seg)
         if valid.sum() == 0:
-            return
-        mean_val = float(np.nanmean(y_seg[valid]))
+            return None
+        xv = x_seg[valid]
+        yv = y_seg[valid]
+        median_val = float(np.nanmedian(yv))
+        xmin = float(np.min(xv))
+        xmax = float(np.max(xv))
         ax.hlines(
-            y=mean_val,
-            xmin=float(x_seg[0]),
-            xmax=float(x_seg[-1]),
+            y=median_val,
+            xmin=xmin,
+            xmax=xmax,
             color=color,
             linestyle=linestyle,
-            linewidth=1.4,
-            alpha=0.95,
+            linewidth=1.5,
+            alpha=0.9,
         )
-        if mean_val > y_max - 0.02:
-            y_label = mean_val - 0.006
-            va = "top"
-        else:
-            y_label = mean_val + 0.006
-            va = "bottom"
-        ax.text(
-            label_x,
-            y_label,
-            f"{mean_val:.3f}",
-            ha=label_ha,
-            va=va,
-            fontsize=7,
-            color=color,
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, pad=0.15),
-        )
+        return median_val, xmin, xmax
 
-    for idx, (ax, csv_name) in enumerate(zip(axes_flat, model_order)):
+    filtered_by_model: dict[str, pd.DataFrame] = {}
+    for csv_name in model_order:
         entry = data[csv_name]
         df = entry["df"].copy().sort_values("date")
         df = df.drop_duplicates(subset=["date"], keep="last")
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+        df = df[(df["date"] >= CHRONO_START_DATE) & (df["date"] <= CHRONO_END_DATE)].copy()
+        df["day_num"] = (df["date"] - CHRONO_START_DATE).dt.days + 1
+        df = df[(df["day_num"] >= 1) & (df["day_num"] <= 91)].copy()
+        filtered_by_model[csv_name] = df.sort_values("day_num").drop_duplicates(subset=["day_num"], keep="last")
 
-        n_days = len(df)
-        x = np.arange(1, n_days + 1, dtype=float)
-        y = pd.to_numeric(df[metric], errors="coerce").to_numpy(dtype=float)
-        x_labels = df["date"].dt.strftime("%m-%d")
+    metric_limits: dict[str, tuple[float, float]] = {}
+    for metric_key in ("nMAE", "nRMSE"):
+        vals = []
+        for csv_name in model_order:
+            arr = pd.to_numeric(filtered_by_model[csv_name][metric_key], errors="coerce").to_numpy(dtype=float)
+            arr = arr[np.isfinite(arr)]
+            if arr.size:
+                vals.append(arr)
+        if not vals:
+            metric_limits[metric_key] = (0.0, 1.0)
+            continue
+        all_vals = np.concatenate(vals)
+        vmin = float(np.nanmin(all_vals))
+        vmax = float(np.nanmax(all_vals))
+        if np.isclose(vmin, vmax):
+            delta = max(1e-6, abs(vmin) * 0.05, 0.005)
+            metric_limits[metric_key] = (vmin - delta, vmax + delta)
+        else:
+            metric_limits[metric_key] = (vmin, vmax)
 
-        highlight_days = min(30, n_days)
-        highlight_start = n_days - highlight_days + 1
-        first_days = min(61, n_days)
-        last_days = min(30, n_days)
+    for plot_idx, (csv_name, metric_key) in enumerate(subplot_specs):
+        ax = axes_flat[plot_idx]
+        entry = data[csv_name]
+        df = filtered_by_model[csv_name]
 
+        x = df["day_num"].to_numpy(dtype=float)
+        y = pd.to_numeric(df[metric_key], errors="coerce").to_numpy(dtype=float)
+        if x.size == 0:
+            continue
+
+        first_mask = x <= 61
+        last_mask = x >= 62
+
+        y_min, y_max = metric_limits[metric_key]
         if csv_name in highlight_models:
-            ax.axvspan(highlight_start - 0.5, n_days + 0.5, color="lightgray", alpha=0.3, zorder=0)
+            ax.axvspan(61.5, 91.5, color="lightgray", alpha=0.3, zorder=0)
+
         ax.plot(
             x,
             y,
             linestyle="-",
-            linewidth=1.0,
+            linewidth=1,
             marker="o",
-            markersize=3,
-            color=entry["color"],
+            markersize=1,
+            color="#8B8B8B",
         )
-        first_label_x = float((x[0] + x[first_days - 1]) / 2) if first_days > 0 else 1.0
-        last_label_x = float((x[-last_days] + x[-1]) / 2) if last_days > 0 else float(n_days)
-        plot_segment_mean(
-            ax,
-            x[:first_days],
-            y[:first_days],
-            color="#555555",
-            linestyle="--",
-            label_x=first_label_x,
-            label_ha="center",
-        )
-        plot_segment_mean(
-            ax,
-            x[-last_days:],
-            y[-last_days:],
+        # Median lines over the fixed day intervals 1-61 and 62-91.
+        seg_first = plot_segment_median(ax, x[first_mask], y[first_mask], color=entry["color"], linestyle=":")
+        seg_last = plot_segment_median(ax, x[last_mask], y[last_mask], color=entry["color"], linestyle=":")
+
+        ax.set_xlim(0.5, 91.5)
+        ax.set_ylim(y_min, y_max)
+        ax.set_xticks(tick_days)
+        ax.set_xticklabels(tick_labels)
+        ax.grid(True, axis="y", alpha=0.3)
+        ax.tick_params(axis="y", labelsize=8.8)
+        ax.tick_params(axis="x", labelsize=8.8)
+
+        y_span = max(1e-9, y_max - y_min)
+        y_off = y_span * 0.015
+        if seg_first is not None:
+            med, xmin, xmax = seg_first
+            ax.text(
+                (xmin + xmax) / 2.0,
+                med + y_off,
+                f"{med:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=9.0,
+                color=entry["color"],
+            )
+        if seg_last is not None:
+            med, xmin, xmax = seg_last
+            ax.text(
+                (xmin + xmax) / 2.0,
+                med + y_off,
+                f"{med:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=9.0,
+                color=entry["color"],
+            )
+
+        ax.set_ylabel(metric_key, fontsize=10.0)
+        ax.text(
+            0.01,
+            0.95,
+            entry["label"],
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9.2,
             color="#222222",
-            linestyle="-.",
-            label_x=last_label_x,
-            label_ha="center",
         )
 
-        if csv_name in highlight_models and n_days > 0:
-            transition_x = highlight_start - 0.5
-            y_text = 0.98
-            txt_style = dict(transform=ax.get_xaxis_transform(), va="top", fontsize=7, color="#444444")
+        if plot_idx < len(subplot_specs) - 1:
+            ax.tick_params(axis="x", which="both", labelbottom=False)
+
+        if csv_name in highlight_models:
+            txt_style = dict(transform=ax.get_xaxis_transform(), va="top", fontsize=7.6, color="#444444")
             ax.text(
-                transition_x - 0.6,
-                y_text,
-                f"n = {first_days} rolling retrains",
+                60.8,
+                0.98,
+                "n = 61 rolling retrains",
                 ha="right",
                 **txt_style,
             )
             ax.text(
-                transition_x + 0.6,
-                y_text,
-                f"n = {last_days} frozen deployment days",
+                62.2,
+                0.98,
+                "n = 30 frozen deployment days",
                 ha="left",
                 **txt_style,
             )
 
-        ax.set_title(entry["label"])
-        ax.set_ylim(y_min, y_max)
-        ax.set_xlim(0.5, n_days + 0.5)
-        ax.set_xticks(x)
-        if idx == n_models - 1:
-            ax.set_xticklabels(x_labels, rotation=90, ha="center", fontsize=7)
-        else:
-            ax.tick_params(axis="x", which="both", labelbottom=False)
-        ax.grid(True, axis="y", alpha=0.3)
 
-    for ax in axes_flat:
-        ax.set_ylabel(metric)
-    axes_flat[-1].set_xlabel("Testday (date)")
-
-    fig.suptitle(f"{metric} over all test days per model")
-    fig.tight_layout()
-    plt.savefig(save_path, dpi=150)
+    fig.tight_layout(rect=(0, 0, 1, 0.98))
+    plt.savefig(save_path, dpi=300)
     plt.close(fig)
 
 
@@ -457,9 +495,8 @@ def main() -> None:
     # PNG Boxplots (split by period: first 61 and last 30 days)
     plot_boxplots(data, OUTPUT_DIR / "overall_metrics_boxplots.png")
 
-    # PNG Chronological per metric (4 subplots = 1 per model)
-    plot_metric_over_time_all_models("nMAE", data, OUTPUT_DIR / "overall_metrics_chrono_nmae.png")
-    plot_metric_over_time_all_models("nRMSE", data, OUTPUT_DIR / "overall_metrics_chrono_nrmse.png")
+    # PNG Chronological combined (8 subplots = 4 models x 2 metrics) up to day 91
+    plot_metrics_over_time_all_models(data, OUTPUT_DIR / "overall_metrics_chrono_combined.png")
 
 
 if __name__ == "__main__":

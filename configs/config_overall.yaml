@@ -3,6 +3,7 @@ model_colors:
   physical_model: "tab:orange"
   source_model: "tab:green"
   target_model: "tab:red"
+  standard_model: "tab:gray"
 
 models:
   - ["transfer_model_testday_metrics.csv", "Transfer Learning", "transfer_model"]

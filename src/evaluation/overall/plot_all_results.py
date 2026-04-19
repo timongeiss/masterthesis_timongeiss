@@ -26,6 +26,29 @@ OUTPUT_DIR = PROJECT_ROOT / "reports" / "overall"
 CONFIG_PATH = PROJECT_ROOT / "configs" / "config_overall.yaml"
 P_INSTALLED_KW = 9.72
 PHYSICAL_ALL_METRICS_CSV = "physical_model_all_metrics.csv"
+SCATTER_PANEL_ORDER = [
+    "physical_model_all_metrics.csv",   # top-left
+    "source_model_all_metrics.csv",     # top-right
+    "target_model_all_metrics.csv",     # bottom-left
+    "transfer_model_all_metrics.csv",   # bottom-right
+]
+
+# A4-friendly export defaults (paper embedding in thesis/report documents).
+A4_WIDTH_IN = 8.27
+A4_HEIGHT_IN = 11.69
+PAGE_MARGIN_X_IN = 0.55
+PAGE_MARGIN_Y_IN = 1.05
+FIG_WIDTH_IN = A4_WIDTH_IN - (2.0 * PAGE_MARGIN_X_IN)
+STACKED_HEIGHT_IN = A4_HEIGHT_IN - (2.0 * PAGE_MARGIN_Y_IN)
+SCATTER_FIGSIZE_IN = (FIG_WIDTH_IN, FIG_WIDTH_IN)
+STACKED_FIGSIZE_IN = (FIG_WIDTH_IN, STACKED_HEIGHT_IN)
+EXPORT_DPI = 300
+
+FONT_SIZE_BASE = 9
+FONT_SIZE_SMALL = 8
+FONT_SIZE_TITLE = 10
+FONT_SIZE_SUPTITLE = 11
+FONT_SIZE_LEGEND = 8
 
 
 def load_config() -> Tuple[List[List[str]], Dict[str, str]]:
@@ -37,6 +60,20 @@ def load_config() -> Tuple[List[List[str]], Dict[str, str]]:
 
 
 MODELS_ALL, MODEL_COLORS = load_config()
+
+
+def apply_plot_style() -> None:
+    plt.rcParams.update(
+        {
+            "font.size": FONT_SIZE_BASE,
+            "axes.titlesize": FONT_SIZE_TITLE,
+            "axes.labelsize": FONT_SIZE_BASE,
+            "xtick.labelsize": FONT_SIZE_SMALL,
+            "ytick.labelsize": FONT_SIZE_SMALL,
+            "legend.fontsize": FONT_SIZE_LEGEND,
+            "figure.titlesize": FONT_SIZE_SUPTITLE,
+        }
+    )
 
 
 def _to_float(series: pd.Series) -> pd.Series:
@@ -83,11 +120,15 @@ def plot_all_models_scatter(
     phase_filter: str | None = None,
     title_suffix: str = "all days",
 ) -> None:
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 2, figsize=SCATTER_FIGSIZE_IN, sharex=True, sharey=True)
     axes_flat = np.array(axes).reshape(-1)
     axis_max = P_INSTALLED_KW
 
-    for idx, (ax, (csv_name, _, _)) in enumerate(zip(axes_flat, MODELS_ALL)):
+    for csv_name in SCATTER_PANEL_ORDER:
+        if csv_name not in data:
+            raise KeyError(f"Scatter panel order references unknown model CSV: {csv_name}")
+
+    for idx, (ax, csv_name) in enumerate(zip(axes_flat, SCATTER_PANEL_ORDER)):
         entry = data[csv_name]
         df = entry["df"]
         if phase_filter is not None:
@@ -108,7 +149,15 @@ def plot_all_models_scatter(
         ax.set_ylim(0, axis_max)
         ax.set_aspect("equal", adjustable="box")
         ax.grid(True, alpha=0.3)
-        ax.text(0.02, 0.95, f"N={len(subset):,}", transform=ax.transAxes, ha="left", va="top", fontsize=8)
+        ax.text(
+            0.02,
+            0.95,
+            f"N={len(subset):,}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=FONT_SIZE_SMALL,
+        )
 
         if idx % 2 == 0:
             ax.set_ylabel("Prediction [kW]")
@@ -116,14 +165,14 @@ def plot_all_models_scatter(
             ax.set_xlabel("Truth [kW]")
 
     fig.suptitle(f"Prediction vs Truth by model ({title_suffix})")
-    fig.tight_layout()
-    plt.savefig(save_path, dpi=150)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    plt.savefig(save_path, dpi=EXPORT_DPI)
     plt.close(fig)
 
 
 def plot_point_error_boxplots(data: Dict[str, Dict[str, object]], save_path: Path) -> None:
     """Create boxplots from point-level nMAE values (all/61d/30d)."""
-    fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True, sharey=True)
+    fig, axes = plt.subplots(3, 1, figsize=STACKED_FIGSIZE_IN, sharex=True, sharey=True)
     phase_specs = [
         (None, "All data"),
         ("rolling_retrains", "Rolling retrains (61 days)"),
@@ -169,14 +218,14 @@ def plot_point_error_boxplots(data: Dict[str, Dict[str, object]], save_path: Pat
     axes[-1].tick_params(axis="x", labelrotation=20)
     axes[-1].set_xlabel("Model")
     fig.suptitle("Point-level error boxplots by period")
-    fig.tight_layout()
-    plt.savefig(save_path, dpi=150)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    plt.savefig(save_path, dpi=EXPORT_DPI)
     plt.close(fig)
 
 
 def plot_point_error_histograms(data: Dict[str, Dict[str, object]], save_path: Path) -> None:
     """Create histogram view from point-level nMAE values (all/61d/30d)."""
-    fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True, sharey=True)
+    fig, axes = plt.subplots(3, 1, figsize=STACKED_FIGSIZE_IN, sharex=True, sharey=True)
     phase_specs = [
         (None, "All data"),
         ("rolling_retrains", "Rolling retrains (61 days)"),
@@ -206,16 +255,17 @@ def plot_point_error_histograms(data: Dict[str, Dict[str, object]], save_path: P
         ax.set_ylabel("Density")
         ax.set_xlim(0.0, 0.4)
         ax.grid(True, axis="both", alpha=0.3)
-        ax.legend(fontsize=8, loc="upper right")
+        ax.legend(loc="upper right")
 
     axes[-1].set_xlabel("nMAE")
     fig.suptitle("Point-level error histograms by period")
-    fig.tight_layout()
-    plt.savefig(save_path, dpi=150)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    plt.savefig(save_path, dpi=EXPORT_DPI)
     plt.close(fig)
 
 
 def main() -> None:
+    apply_plot_style()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     data = prepare_data()
 
