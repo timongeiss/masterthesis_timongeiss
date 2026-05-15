@@ -28,10 +28,10 @@ import numpy as np
 # ============================================================
 
 # Nutzbare Batteriekapazitaet [kWh]
-USABLE_CAPACITY_KWH = 9
+USABLE_CAPACITY_KWH = 12
 
 # Ersatzkosten [EUR]
-REPLACEMENT_COST_EUR = 8000.0
+REPLACEMENT_COST_EUR = 8500.0
 
 # Erwartete Vollzyklen bis Lebensende [-]
 EXPECTED_FULL_CYCLES = 12000
@@ -97,12 +97,12 @@ def plot_piecewise_cost_over_capacity(
     y_avg_eur = avg_cost_per_kwh * x_kwh
 
     # 2-Segment-Funktion mit Knick bei 50%:
-    # - 0..4.5 kWh: tiefer Entladebereich -> omega_2 (teurer/steiler)
-    # - 4.5..9 kWh: weniger tiefer Bereich -> omega_1 (guenstiger/flacher)
+    # - 0..split_kwh: oberes Segment (keine Tiefentladung) -> omega_1 (guenstiger/flacher)
+    # - split_kwh..usable_capacity_kwh: tiefes Segment -> omega_2 (teurer/steiler)
     y_piecewise_eur = np.where(
         x_kwh <= split_kwh,
-        omega_2_per_kwh * x_kwh,
-        (omega_2_per_kwh * split_kwh) + omega_1_per_kwh * (x_kwh - split_kwh),
+        omega_1_per_kwh * x_kwh,
+        (omega_1_per_kwh * split_kwh) + omega_2_per_kwh * (x_kwh - split_kwh),
     )
 
     fig, ax = plt.subplots(figsize=FIGSIZE_A4_INCH, dpi=EXPORT_DPI)
@@ -111,14 +111,14 @@ def plot_piecewise_cost_over_capacity(
     ax.plot(x_kwh, y_avg_eur, color="#1f77b4", linewidth=1.8, label="Average slope")
     ax.plot(x_kwh, y_piecewise_eur, color="#111111", linewidth=1.8, label="Piecewise (omega_1 / omega_2)")
 
-    y_split = omega_2_per_kwh * split_kwh
-    y_end = (omega_2_per_kwh * split_kwh) + omega_1_per_kwh * (usable_capacity_kwh - split_kwh)
+    y_split = omega_1_per_kwh * split_kwh
+    y_end = (omega_1_per_kwh * split_kwh) + omega_2_per_kwh * (usable_capacity_kwh - split_kwh)
     ax.scatter([split_kwh, usable_capacity_kwh], [y_split, y_end], color="#111111", s=16, zorder=4)
 
     ax.text(
         split_kwh * 0.5,
         y_end * 0.96,
-        "0-4.5 kWh: Deep discharge zone (omega_2)",
+        f"0-{split_kwh:.1f} kWh discharged: Upper segment (omega_1)",
         ha="center",
         va="top",
         fontsize=8,
@@ -127,14 +127,17 @@ def plot_piecewise_cost_over_capacity(
     ax.text(
         split_kwh + (usable_capacity_kwh - split_kwh) * 0.5,
         y_end * 0.96,
-        "4.5-9 kWh: Shallower zone (omega_1)",
+        f"{split_kwh:.1f}-{usable_capacity_kwh:.1f} kWh discharged: Deep segment (omega_2)",
         ha="center",
         va="top",
         fontsize=8,
         color="#222222",
     )
 
-    ax.set_title("Cycle Aging Cost vs Discharge Depth (9 kWh) - Average vs Piecewise", fontsize=10)
+    ax.set_title(
+        f"Cycle Aging Cost vs Discharge Depth ({usable_capacity_kwh:.0f} kWh usable) - Average vs Piecewise",
+        fontsize=10,
+    )
     ax.set_xlabel("Discharge Depth [kWh]", fontsize=9)
     ax.set_ylabel("Cumulative Aging Cost [EUR]", fontsize=9)
     ax.grid(True, axis="both", linestyle="-", linewidth=0.5, alpha=0.35)
@@ -178,11 +181,12 @@ def main() -> None:
     omega_2_per_mwh = to_eur_per_mwh(omega_2_per_kwh)
 
     # 5) Plausibilisierung: Segmentkosten fuer einen Vollzyklus.
+    # Segment 1 = oberes Halbsegment (kein Deep-Discharge, omega_1).
+    # Segment 2 = unteres Halbsegment (Deep-Discharge, omega_2).
     segment_1_energy_kwh = USABLE_CAPACITY_KWH * 0.5
     segment_2_energy_kwh = USABLE_CAPACITY_KWH * 0.5
-    # Fuer diesen Plot: erstes Halbsegment nutzt omega_2 (steiler), zweites omega_1.
-    segment_1_cost_eur = omega_2_per_kwh * segment_1_energy_kwh
-    segment_2_cost_eur = omega_1_per_kwh * segment_2_energy_kwh
+    segment_1_cost_eur = omega_1_per_kwh * segment_1_energy_kwh
+    segment_2_cost_eur = omega_2_per_kwh * segment_2_energy_kwh
     full_cycle_cost_from_segments_eur = segment_1_cost_eur + segment_2_cost_eur
 
     # 6) Ausgabe.
@@ -209,8 +213,8 @@ def main() -> None:
     print("\nPlausibilisierung (Vollzyklus aus Segmenten)")
     print(f"segment 1 energy [kWh]             = {segment_1_energy_kwh:.4f}")
     print(f"segment 2 energy [kWh]             = {segment_2_energy_kwh:.4f}")
-    print(f"segment 1 cost [EUR]               = {segment_1_cost_eur:.8f}")
-    print(f"segment 2 cost [EUR]               = {segment_2_cost_eur:.8f}")
+    print(f"segment 1 cost [EUR] (omega_1)     = {segment_1_cost_eur:.8f}")
+    print(f"segment 2 cost [EUR] (omega_2)     = {segment_2_cost_eur:.8f}")
     print(f"full cycle cost (seg1+seg2) [EUR]  = {full_cycle_cost_from_segments_eur:.8f}")
     print(f"reference full cycle cost [EUR]    = {cost_per_full_cycle_eur:.8f}")
 

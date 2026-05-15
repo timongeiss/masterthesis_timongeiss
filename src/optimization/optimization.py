@@ -385,6 +385,13 @@ def compute_dispatch_settlement(
 
     Returns:
         Dispatch-DataFrame inklusive Realized-/Settlement-Spalten.
+        Dabei gilt:
+        - `real_revenue_step_da_eur`: reiner Energieanteil auf realisierter Menge
+          (ohne Grid Fee)
+        - `real_grid_fee_step_eur`: Grid Fee nur auf realem Netzbezug
+        - `real_revenue_step_eur`: DA-Fahrplanerloes mit Grid Fee auf realem Import
+        - falls bereits ein intradayfaehiger Realpfad vorliegt, wird dieser
+          direkt verwendet; sonst greift die bisherige fixed-battery-Nachrechnung
 
     Raises:
         RuntimeError: Wenn reale PV oder reBAP nicht vollstaendig auf
@@ -397,54 +404,66 @@ def compute_dispatch_settlement(
     dt_h = FIXED_TIMESTEP_MINUTES / 60.0
     grid_fee = float(cfg["optimization"]["grid_fee_eur_per_mwh"])
 
-    out["real_P_pv_W"] = real_pv_series.reindex(pd.to_datetime(out["datetime"])).to_numpy(dtype=float)
+    if "real_P_pv_W" not in out.columns:
+        out["real_P_pv_W"] = real_pv_series.reindex(pd.to_datetime(out["datetime"])).to_numpy(dtype=float)
 
     if out["real_P_pv_W"].isna().any():
         raise RuntimeError("Reale PV konnte nicht vollstaendig auf Dispatch-Zeiten gemappt werden.")
 
-    # Realisierte Curtailment-Leistung:
-    # - niemals > geplanter Curtailment-Setpoint
-    # - nur bei negativem DA-Preis
-    # - nur aus tatsaechlichem PV-Ueberschuss (keine "Curtailment+Import"- Situationen)
-    net_without_curt_real = (
-        out["input_P_load_W"]
-        + out["opt_P_ch_W"]
-        - out["real_P_pv_W"]
-        - out["opt_P_dis_W"]
+    has_precomputed_real_path = all(
+        col in out.columns
+        for col in (
+            "real_P_curt_W",
+            "real_P_grid_in_W",
+            "real_P_grid_out_W",
+        )
     )
-    
-    #positiv: realer Netzbezug (Import) = Last + Ladung - PV - Entladung > 0 => Import, negativer Wert = Export
-    
-    # davon nur den realen Überschuss
-    export_surplus_real_w = (-net_without_curt_real).clip(lower=0.0)
-    
-    # zeitpunkte mit negativem DA-Preis (Curtailment erlaubt) identifizieren
-    price_is_negative = out["input_price_EUR_MWh"] < 0.0
-    
-    # 
-    out["real_P_curt_W"] = np.where(
-        price_is_negative.to_numpy(dtype=bool),
-        np.minimum(
-            np.minimum(
-                out["opt_P_curt_W"].to_numpy(dtype=float),
-                export_surplus_real_w.to_numpy(dtype=float),
-            ),
-            out["real_P_pv_W"].clip(lower=0.0).to_numpy(dtype=float),
-        ),
-        0.0,
-    )
-    net_grid_real = net_without_curt_real + out["real_P_curt_W"]
-    
-    # realen Netzbezug und -einspeisung berechnen
-    out["real_P_grid_in_W"] = net_grid_real.clip(lower=0.0)
-    out["real_P_grid_out_W"] = (-net_grid_real).clip(lower=0.0)
-    
+    aging_cost_col = "real_cycle_aging_cost_step_eur" if "real_cycle_aging_cost_step_eur" in out.columns else "opt_cycle_aging_cost_step_eur"
 
-    # Nur als Diagnose: DA-Cashflow auf realisierter Menge (nicht fuer Settlement genutzt).
+    if not has_precomputed_real_path:
+        # Realisierte Curtailment-Leistung:
+        # - niemals > geplanter Curtailment-Setpoint
+        # - nur bei negativem DA-Preis
+        # - nur aus tatsaechlichem PV-Ueberschuss (keine "Curtailment+Import"-Situationen)
+        net_without_curt_real = (
+            out["input_P_load_W"]
+            + out["opt_P_ch_W"]
+            - out["real_P_pv_W"]
+            - out["opt_P_dis_W"]
+        )
+        # positiv: realer Netzbezug (Import) = Last + Ladung - PV - Entladung > 0
+        # negativ: realer Ueberschuss vor Curtailment => Export
+        # davon nur den realen Ueberschuss
+        export_surplus_real_w = (-net_without_curt_real).clip(lower=0.0)
+        # Zeitpunkte mit negativem DA-Preis identifizieren (nur dort ist Curtailment erlaubt)
+        price_is_negative = out["input_price_EUR_MWh"] < 0.0
+
+        out["real_P_curt_W"] = np.where(
+            price_is_negative.to_numpy(dtype=bool),
+            np.minimum(
+                np.minimum(
+                    out["opt_P_curt_W"].to_numpy(dtype=float),
+                    export_surplus_real_w.to_numpy(dtype=float),
+                ),
+                out["real_P_pv_W"].clip(lower=0.0).to_numpy(dtype=float),
+            ),
+            0.0,
+        )
+        net_grid_real = net_without_curt_real + out["real_P_curt_W"]
+        # Realen Netzbezug und reale Einspeisung aus dem saldierten Leistungsfehler berechnen
+        out["real_P_grid_in_W"] = net_grid_real.clip(lower=0.0)
+        out["real_P_grid_out_W"] = (-net_grid_real).clip(lower=0.0)
+
+    # Nur als Diagnose:
+    # - DA-Cashflow auf realisierter Menge (ohne Grid Fee)
+    # - echte Grid Fee auf realem Netzbezug
     out["real_revenue_step_da_eur"] = (
         (out["input_price_EUR_MWh"] * out["real_P_grid_out_W"])
-        - ((out["input_price_EUR_MWh"] + grid_fee) * out["real_P_grid_in_W"])
+        - (out["input_price_EUR_MWh"] * out["real_P_grid_in_W"])
     ) * dt_h / 1e6
+    out["real_grid_fee_step_eur"] = (
+        grid_fee * out["real_P_grid_in_W"] * dt_h / 1e6
+    )
 
     out["opt_P_grid_net_W"] = out["opt_P_grid_in_W"] - out["opt_P_grid_out_W"]  # nettoer Netzbezug laut Optimierung (positiv = Import, negativ = Export)
     out["real_P_grid_net_W"] = out["real_P_grid_in_W"] - out["real_P_grid_out_W"]  # nettoer Netzbezug in Realitaet (positiv = Import, negativ = Export)
@@ -476,8 +495,20 @@ def compute_dispatch_settlement(
     # - revenue (Erloes)  -> positiv
     out["real_rebap_settlement_step_eur"] = -out["real_imbalance_energy_mwh"] * out["real_imbalance_price_eur_mwh"]
 
-    out["real_revenue_step_eur"] = out["opt_revenue_step_eur"]
+    # Fachlogik:
+    # - DA-Energie bleibt auf dem geplanten Fahrplan
+    # - Grid Fee faellt nur auf realen Netzbezug an
+    planned_da_energy_step_eur = (
+        (out["input_price_EUR_MWh"] * out["opt_P_grid_out_W"])
+        - (out["input_price_EUR_MWh"] * out["opt_P_grid_in_W"])
+    ) * dt_h / 1e6
+    out["real_revenue_step_eur"] = (
+        planned_da_energy_step_eur - out["real_grid_fee_step_eur"]
+    )
     out["real_revenue_step_net_eur"] = out["real_revenue_step_eur"] + out["real_rebap_settlement_step_eur"]
+    out["real_revenue_step_net_after_aging_eur"] = (
+        out["real_revenue_step_net_eur"] - out[aging_cost_col]
+    )
 
     return out
 
@@ -489,7 +520,8 @@ def aggregate_run_realized_metrics(dispatch_df: pd.DataFrame) -> pd.DataFrame:
         dispatch_df: Dispatch-DataFrame mit Spalten
             `run_id`, `real_revenue_step_eur`,
             `real_rebap_settlement_step_eur`,
-            `real_revenue_step_net_eur`.
+            `real_revenue_step_net_eur`,
+            `real_revenue_step_net_after_aging_eur`.
 
     Returns:
         DataFrame mit:
@@ -497,6 +529,7 @@ def aggregate_run_realized_metrics(dispatch_df: pd.DataFrame) -> pd.DataFrame:
         - `real_revenue_dispatch_day_eur`
         - `real_rebap_settlement_dispatch_day_eur`
         - `real_revenue_dispatch_day_net_eur`
+        - `real_revenue_dispatch_day_net_after_aging_eur`
     """
     
     cols = [
@@ -504,6 +537,7 @@ def aggregate_run_realized_metrics(dispatch_df: pd.DataFrame) -> pd.DataFrame:
         "real_revenue_step_eur",
         "real_rebap_settlement_step_eur",
         "real_revenue_step_net_eur",
+        "real_revenue_step_net_after_aging_eur",
     ]
     if dispatch_df.empty:
         return pd.DataFrame(
@@ -512,6 +546,7 @@ def aggregate_run_realized_metrics(dispatch_df: pd.DataFrame) -> pd.DataFrame:
                 "real_revenue_dispatch_day_eur",
                 "real_rebap_settlement_dispatch_day_eur",
                 "real_revenue_dispatch_day_net_eur",
+                "real_revenue_dispatch_day_net_after_aging_eur",
             ]
         )
 
@@ -520,9 +555,10 @@ def aggregate_run_realized_metrics(dispatch_df: pd.DataFrame) -> pd.DataFrame:
         .sum()
         .rename(
             columns={
-                "real_revenue_step_eur": "real_revenue_dispatch_day_eur",                       #optimaler und umgesetzter DA-Erloes pro Tag
+                "real_revenue_step_eur": "real_revenue_dispatch_day_eur",                       #DA-Fahrplanerloes pro Tag mit Grid Fee auf realem Import
                 "real_rebap_settlement_step_eur": "real_rebap_settlement_dispatch_day_eur",     #imbalance erloes/ kosten pro Tag
                 "real_revenue_step_net_eur": "real_revenue_dispatch_day_net_eur",               #netto Erloes pro Tag (DA-Erloes + reBAP-Settlement)
+                "real_revenue_step_net_after_aging_eur": "real_revenue_dispatch_day_net_after_aging_eur",  # netto inkl. reBAP und Alterungskosten
             }
         )
     )
