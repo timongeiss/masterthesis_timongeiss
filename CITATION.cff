@@ -4,9 +4,9 @@ authors:
   - family-names: "Geiss"
     given-names: "Timon"
     orcid: "https://orcid.org/0009-0001-0535-3847"
-title: "Economic comparison of PV forecasting strategies for data scarcity with NWP-based models and transfer learning - supplementary code"
+title: "Transfer Learning for PV Forecasting under Data Scarcity: Error-Based and Economic Evaluation of NWP-Driven Hybrid Models - Supplementary Code"
 type: thesis
-thesis-type: "Master's Thesis"
+thesis-type: "Diploma Thesis"
 year: 2026
 month: 8
 institution:
