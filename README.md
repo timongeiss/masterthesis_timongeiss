@@ -1,5 +1,4 @@
-# Transfer Learning for PV Forecasting under Data Scarcity:
-# Error-Based and Economic Evaluation of NWP-Driven Hybrid Models
+# Transfer Learning for PV Forecasting under Data Scarcity: Error-Based and Economic Evaluation of NWP-Driven Hybrid Models
 
 ## Abstract
 
