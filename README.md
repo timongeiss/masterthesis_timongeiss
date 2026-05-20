@@ -1,4 +1,6 @@
-# Abstract
+# Transfer Learning for PV Forecasting under Data Scarcity: Error-Based and Economic Evaluation of NWP-Driven Hybrid Models
+
+## Abstract
 
 Accurate photovoltaic (PV) power forecasting is essential for the economic integration of PV systems into electricity markets. For day-ahead market participation, operators must submit reliable schedules before delivery. Data-driven and hybrid models often achieve high accuracy, but require extensive historical power and weather data from the target system. For newly installed or newly integrated PV plants, these data are initially unavailable, resulting in a cold-start problem.
 
@@ -12,7 +14,7 @@ The transfer-learning model shows no deterioration after the learning stop and a
 
 The economic evaluation further shows that overforecasting is more harmful than underforecasting, with an average imbalance-related cash flow of -0.14€/kWh compared with +0.07€/kWh. Deviations leading to unplanned imports are the most costly, while unexpected exports cause little economic damage. PV forecasting models for day-ahead dispatch should therefore penalize overforecasts more strongly.
 
-# Documentation
+## Code Documentation
 
 This section provides an overview of the software provided. For detailed information on how it works and references for the methodological choices made in implementing the algorithms in this project, please refer to the thesis.
 
