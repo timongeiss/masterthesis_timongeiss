@@ -5,12 +5,7 @@ authors:
     given-names: "Timon"
     orcid: "https://orcid.org/0009-0001-0535-3847"
 title: "Transfer Learning for PV Forecasting under Data Scarcity: Error-Based and Economic Evaluation of NWP-Driven Hybrid Models - Supplementary Code"
-type: thesis
-thesis-type: "Diploma Thesis"
-year: 2026
-month: 8
-institution:
-  name: "TU Wien"
-  address: "Karlsplatz 13, 1040 Wien"
-  country: AT
+type: software
+date-released: "2026-08-01"
+repository-code: "https://github.com/timongeiss/masterthesis_timongeiss"
 url: "https://github.com/timongeiss/masterthesis_timongeiss"
