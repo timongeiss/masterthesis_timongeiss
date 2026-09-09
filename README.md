@@ -12,7 +12,7 @@ Target data collected during the cold-start phase are used to train a target mod
 
 The transfer-learning model shows no deterioration after the learning stop and achieves the best overall accuracy and economic performance, with an nRMSE of 9.0% and procurement cost of 27€. It is therefore the most effective strategy for the investigated cold-start setting and for data-scarcity situations with up to 60 days of system-specific data. Day-ahead market participation remains beneficial compared with a feed-in tariff of 5ct/kWh, but is no longer advantageous from 6ct/kWh onward.
 
-The economic evaluation further shows that overforecasting is more harmful than underforecasting, with an average imbalance-related cash flow of -0.14€/kWh compared with +0.07€/kWh for underforecasts. Deviations leading to unplanned imports are the most costly, while unexpected exports cause little economic damage. PV forecasting models for day-ahead dispatch should therefore penalize overforecasts more strongly.
+The economic evaluation further shows that overforecasting is more harmful than underforecasting, with an average imbalance-related cash flow of -0.14€/kWh compared with +0.06€/kWh for underforecasts. Deviations leading to unplanned imports are the most costly, while unexpected exports cause little economic damage. PV forecasting models for day-ahead dispatch should therefore penalize overforecasts more strongly.
 
 ## Code Documentation
 
