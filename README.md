@@ -1,47 +1,67 @@
-# Transfer Learning for PV Forecasting under Data Scarcity: Error-Based and Economic Evaluation of NWP-Driven Hybrid Models
+# PV Forecasting under Data Scarcity - Research Code and Reproduction
 
-## Abstract
+Software accompanying the master's thesis **"Transfer Learning for PV Forecasting under Data Scarcity: Error-Based and Economic Evaluation of NWP-Driven Hybrid Models"** and the follow-up manuscript **"Transfer Learning for Photovoltaic Forecasting under Data Scarcity: Technical and Economic Value of Generic Multi-System Pretraining under Domain Shift."**
 
-Accurate photovoltaic (PV) power forecasting is essential for the economic integration of PV systems into electricity markets. For day-ahead market participation, operators must submit reliable schedules before delivery. Data-driven and hybrid models often achieve high accuracy, but require extensive historical power and weather data from the target system. For newly installed or newly integrated PV plants, these data are initially unavailable, resulting in a cold-start problem.
+This repository contains the research code and configuration files used to develop, train, adapt, and evaluate photovoltaic (PV) forecasting models in a cold-start setting and to assess their use in day-ahead PV–battery dispatch. It is intended as a resource for understanding and reproducing the computational workflow, rather than as a repository of published results.
 
-This thesis investigates transfer learning for PV forecasting under data scarcity and cold-start conditions. A hybrid transfer-learning model fed with numerical weather prediction (NWP) features is developed and compared with three realistic strategies: a physical model, a generic source model trained on source plants, and a target model trained only on incoming target-system data. In contrast to previous approaches, a larger geographical distance between source and target systems is introduced to the transfer-learning setup. All models are evaluated using nMAE and nRMSE and economically through a day-ahead dispatch optimization with a battery storage system.
+## From the Master's Thesis to the Follow-up Paper
 
-The generic source model provides the weakest forecasts with an nRMSE of 12.8%, due to its direct application without target adaptation. The physical model improves the nRMSE to 11.7%, but does not improve economic performance. Compared with total electricity procurement costs of 422€ without PV over the 90-day evaluation period, both models reduce total costs to 34€ without receiving a fixed feed-in tariff.
+The two works originate from the same evolving research project, but address it at different levels of focus.
 
-Target data collected during the cold-start phase are used to train a target model and adapt the source model through transfer learning. During the first 60 days, both data-driven approaches achieve similar accuracy, with an nRMSE of 9.9% for the target model and 9.5% for the transfer-learning model. After relearning stops, the target model fails to generalize and deteriorates over the final 30 days, resulting in an overall nRMSE of 10.3% and procurement cost of 33€, similar to the other reference models.
+**Master's thesis: development and broader assessment.**
 
-The transfer-learning model shows no deterioration after the learning stop and achieves the best overall accuracy and economic performance, with an nRMSE of 9.0% and procurement cost of 27€. It is therefore the most effective strategy for the investigated cold-start setting and for data-scarcity situations with up to 60 days of system-specific data. Day-ahead market participation remains beneficial compared with a feed-in tariff of 5ct/kWh, but is no longer advantageous from 6ct/kWh onward.
+The thesis documents the construction of an end-to-end, numerical-weather-prediction (NWP)-driven PV forecasting and evaluation pipeline. It brings together physical forecasting, a generic multi-system source model, target-only learning, transfer learning, technical error analysis, and a market-oriented PV–battery dispatch model. Its broader scope reflects the development of the software, data infrastructure, and experimental framework.
 
-The economic evaluation further shows that overforecasting is more harmful than underforecasting, with an average imbalance-related cash flow of -0.14€/kWh compared with +0.06€/kWh for underforecasts. Deviations leading to unplanned imports are the most costly, while unexpected exports cause little economic damage. PV forecasting models for day-ahead dispatch should therefore penalize overforecasts more strongly.
+**Follow-up manuscript: a focused applied research question.**
 
-## Code Documentation
+Building on that framework, the paper concentrates on a decision faced by operators integrating a new PV asset: can a model pretrained on a generic portfolio be adapted successfully when little target data are available, even if the source and target differ geographically, in PV-system characteristics, and in weather-data products?
 
-This section provides an overview of the software provided. For detailed information on how it works and references for the methodological choices made in implementing the algorithms in this project, please refer to the thesis.
+The paper organizes the comparison around realistic cold-start options, distinguishes daily adaptation from subsequent operation without parameter updates, and relates forecast quality to economic value in day-ahead dispatch.
 
-Detailed graphical documentation of the process flows can be viewed at: [Documentation Board](https://miro.com/welcomeonboard/NWZVYzl2VnZWUjEwbzR6RHVPODhha3ZnVDZUV3BuSmhrak5SVzBkSURkeUErNXZtQjJIWXlYNkc5czJmQWZoTklrZXpUV0d4b2xVSi9aQ2svV0FoZVZMQ2FLNkVGMm9WVkdRNWJHZUhyeUJaR0dXQVpsWHJjeE1tQjdpN1pGM2pQdGo1ZEV3bUdPQWRZUHQzSGl6V2NBPT0hdjE=?share_link_id=397484122180)
+The shift in storyline is therefore one of research focus and presentation, not two unrelated projects: the thesis describes the broader development and investigation, while the manuscript distills the same underlying work into a more specific, application-oriented contribution. Both are supported by the software in this repository.
 
-This documentation is structured as follows:
+## Implemented Workflow
 
-**Data sources** of the used Datasets are shown as flat cylinders
+The repository supports the main stages of the research pipeline:
 
-**Solid lines with arrows** represent automatic process flows.
+1. **Data acquisition and preparation:** Process measured PV generation, plant metadata, meteorological reanalysis for source-domain training, and recorded operational NWP inputs for the target domain.
+2. **Source-model pretraining:** Train a generic multilayer perceptron (MLP) on measurements from multiple PV systems, using weather and plant-related features.
+3. **Cold-start forecasting strategies:** Generate forecasts using a pvlib-based physical baseline, an unadapted source model, a target-only MLP trained from local observations, and a transfer-learning MLP adapted from the pretrained source representation.
+4. **Sequential evaluation:** Reproduce the progressive target-data setting, daily model adaptation, and a separate no-update phase to assess retained generalization.
+5. **Economic evaluation:** Use PV forecasts for day-ahead PV–battery scheduling and evaluate the resulting deviations using realized PV generation and historical imbalance prices.
 
-**Dotted lines** indicate manual file transfers.
+The follow-up manuscript specifically examines generic pretraining on a portfolio of 172 real PV systems with reanalysis weather inputs and transfer to a geographically distant target forecast with operational NWP inputs. The physical and unadapted source strategies do not require target-specific model fitting; the target-only and transfer-learning strategies are updated as local training data become available.
 
-The project folders are shown as background boxes in the documentation:
-- **data**: contains all documents and databases (csv in green, grib2 in orange, pt in
-red) in different sub-folders for the processing procedure (sub-folders shown with green
-background boxes). Most of the files are not uploaded in this repository, but can be recreated through the process chain.
-- **services**: Created docker services that ran independently for several months in
-preparation for data collection on a workstation (shown as purple box).
-- **src**: Source code with all Python scripts (blue), organized in sub-folders for different stages of the process chain (shown
-as gray boxes)
-- **configs**: Collection of all config files (YAML and txt in pink) for parameterizing
-the Python scripts (shown as pink box)
-- **reports**: Graphic outputs as png (shown in yellow boxes)
+## Repository Structure
 
+| Path | Purpose |
+|---|---|
+| `src/` | Python scripts for data processing, modeling, forecasting, and evaluation. |
+| `configs/` | YAML and text configuration files used to parameterize scripts. |
+| `services/` | Docker-based services used for longer-running data collection. |
+| `data/` | Input, intermediate, and processed data locations; large datasets are not fully included. |
+| `reports/` | Location for generated figures and other reporting outputs. |
+| `CITATION.cff` | Software citation metadata. |
+| `LICENSE` | MIT license. |
 
+## Reproduction and Data Availability
 
-# License
+Start with the scripts in `src/`, their corresponding settings in `configs/`, and the [workflow documentation board](https://miro.com/welcomeonboard/NWZVYzl2VnZWUjEwbzR6RHVPODhha3ZnVDZUV3BuSmhrak5SVzBkSURkeUErNXZtQjJIWXlYNkc5czJmQWZoTklrZXpUV0d4b2xVSi9aQ2svV0FoZVZMQ2FLNkVGMm9WVkdRNWJHZUhyeUJaR0dXQVpsWHJjeE1tQjdpN1pGM2pQdGo1ZEV3bUdPQWRZUHQzSGl6V2NBPT0hdjE=?share_link_id=397484122180), which illustrates the process flow and identifies automated and manual data-transfer steps.
 
-This project is licensed under the MIT License - see the  [LICENSE](LICENSE) file for details.
+This is a research codebase, not a self-contained one-command reproduction package. The software archive does not contain all inputs needed for an exact rerun.
+In particular, large meteorological archives and intermediate datasets are not bundled in full. Reproduction requires the appropriate PV measurements, meteorological inputs, market-price series, and experiment configurations.
+
+Source-domain PV data and reanalysis products are described in the accompanying research documents. Operational target NWP forecasts were collected separately. Availability and access conditions for processed study data should be checked in the corresponding publication or data release.
+
+The purpose of this repository and its software archive is to provide the implementation and reproduction workflow, not to duplicate the manuscript's figures, tables, or numerical findings.
+
+## Related Research and Citation
+
+- **Master's thesis:** Geiss, T. (2026). Transfer Learning for PV Forecasting under Data Scarcity: Error-Based and Economic Evaluation of NWP-Driven Hybrid Models. Master's thesis.
+- **Follow-up manuscript:** Details will be added when available.
+
+For use of the code, cite the archived software version using the metadata in `CITATION.cff` or the DOI assigned to the relevant Zenodo release. For scientific methods and interpretations, cite the corresponding thesis or manuscript.
+
+## License
+
+This project is distributed under the [MIT License](LICENSE).
