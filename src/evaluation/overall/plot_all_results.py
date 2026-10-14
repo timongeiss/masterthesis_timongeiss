@@ -2,6 +2,8 @@
 
 Generates figures in reports/overall:
 - overall_all_results_scatter_kw.png
+- overall_all_results_scatter_kw_fullwidth.pdf
+- overall_all_results_scatter_kw_fullwidth.png
 - overall_all_results_scatter_kw_retrain61.png
 - overall_all_results_scatter_kw_frozen30.png
 - overall_all_results_boxplots.png
@@ -43,6 +45,8 @@ STACKED_HEIGHT_IN = A4_HEIGHT_IN - (2.0 * PAGE_MARGIN_Y_IN)
 SCATTER_FIGSIZE_IN = (FIG_WIDTH_IN, FIG_WIDTH_IN)
 STACKED_FIGSIZE_IN = (FIG_WIDTH_IN, STACKED_HEIGHT_IN)
 EXPORT_DPI = 300
+SCATTER_MEDIAN_BIN_WIDTH_KW = 0.25
+SCATTER_MEDIAN_MIN_SAMPLES = 100
 
 FONT_SIZE_BASE = 9
 FONT_SIZE_SMALL = 8
@@ -51,15 +55,17 @@ FONT_SIZE_SUPTITLE = 11
 FONT_SIZE_LEGEND = 8
 
 
-def load_config() -> Tuple[List[List[str]], Dict[str, str]]:
+def load_config() -> Tuple[List[List[str]], Dict[str, str], Dict[str, str]]:
     with CONFIG_PATH.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     if "models_all" not in cfg:
         raise KeyError("config_overall.yaml requires 'models_all' for plot_all_results.py")
-    return cfg["models_all"], cfg["model_colors"]
+    if "report_model_colors" not in cfg:
+        raise KeyError("config_overall.yaml requires 'report_model_colors' for publication plots")
+    return cfg["models_all"], cfg["model_colors"], cfg["report_model_colors"]
 
 
-MODELS_ALL, MODEL_COLORS = load_config()
+MODELS_ALL, MODEL_COLORS, REPORT_MODEL_COLORS = load_config()
 
 
 def apply_plot_style() -> None:
@@ -110,6 +116,7 @@ def prepare_data() -> Dict[str, Dict[str, object]]:
             "df": df,
             "label": label,
             "color": MODEL_COLORS[color_key],
+            "report_color": REPORT_MODEL_COLORS[color_key],
         }
     return data
 
@@ -167,6 +174,96 @@ def plot_all_models_scatter(
     fig.suptitle(f"Prediction vs Truth by model ({title_suffix})")
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
     plt.savefig(save_path, dpi=EXPORT_DPI)
+    plt.close(fig)
+
+
+def _compact_model_label(label: str) -> str:
+    """Use short panel titles while retaining config-defined display names."""
+    return " ".join(label.replace("Model", "").replace("Learning", "").split())
+
+
+def _binned_forecast_medians(
+    measured_kw: pd.Series,
+    forecast_kw: pd.Series,
+    axis_max: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return forecast medians in equally sized measured-power bins."""
+    edges = np.arange(0.0, axis_max + SCATTER_MEDIAN_BIN_WIDTH_KW, SCATTER_MEDIAN_BIN_WIDTH_KW)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    bin_index = np.digitize(measured_kw.to_numpy(dtype=float), edges, right=False) - 1
+    bin_index = np.clip(bin_index, 0, len(centers) - 1)
+    medians = np.full(len(centers), np.nan, dtype=float)
+    forecasts = forecast_kw.to_numpy(dtype=float)
+
+    for idx in range(len(centers)):
+        values = forecasts[bin_index == idx]
+        if values.size >= SCATTER_MEDIAN_MIN_SAMPLES:
+            medians[idx] = float(np.median(values))
+    return centers, medians
+
+
+def plot_all_models_scatter_fullwidth(
+    data: Dict[str, Dict[str, object]],
+    pdf_path: Path,
+    png_path: Path,
+) -> None:
+    """Create a compact four-panel, full-width scatterplot for journal layouts."""
+    fig, axes = plt.subplots(
+        1,
+        4,
+        figsize=(7.35, 2.05),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+    axis_max = P_INSTALLED_KW
+
+    for ax, csv_name in zip(axes, SCATTER_PANEL_ORDER):
+        if csv_name not in data:
+            raise KeyError(f"Scatter panel order references unknown model CSV: {csv_name}")
+
+        entry = data[csv_name]
+        subset = entry["df"].dropna(subset=["y_true_plot", "y_pred_plot"])
+        ax.scatter(
+            subset["y_true_plot"],
+            subset["y_pred_plot"],
+            s=1.5,
+            alpha=0.08,
+            color=entry["report_color"],
+            edgecolors="none",
+            rasterized=True,
+            zorder=1,
+        )
+        ax.plot(
+            [0, axis_max],
+            [0, axis_max],
+            linestyle="--",
+            linewidth=0.9,
+            color="black",
+            zorder=2,
+        )
+        median_x, median_y = _binned_forecast_medians(
+            subset["y_true_plot"],
+            subset["y_pred_plot"],
+            axis_max,
+        )
+        ax.plot(
+            median_x,
+            median_y,
+            color="black",
+            linewidth=0.8,
+            zorder=3,
+        )
+        ax.set_title(_compact_model_label(str(entry["label"])), fontsize=8, pad=3)
+        ax.set_xlim(0, axis_max)
+        ax.set_ylim(0, axis_max)
+        ax.set_aspect("equal", adjustable="box")
+        ax.tick_params(labelsize=7)
+
+    fig.supxlabel("Measured PV power [kW]", fontsize=8)
+    fig.supylabel("Forecast PV power [kW]", fontsize=8)
+    fig.savefig(pdf_path)
+    fig.savefig(png_path, dpi=EXPORT_DPI)
     plt.close(fig)
 
 
@@ -274,6 +371,11 @@ def main() -> None:
         OUTPUT_DIR / "overall_all_results_scatter_kw.png",
         phase_filter=None,
         title_suffix="all days",
+    )
+    plot_all_models_scatter_fullwidth(
+        data,
+        OUTPUT_DIR / "overall_all_results_scatter_kw_fullwidth.pdf",
+        OUTPUT_DIR / "overall_all_results_scatter_kw_fullwidth.png",
     )
     plot_all_models_scatter(
         data,

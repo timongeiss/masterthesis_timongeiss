@@ -5,26 +5,40 @@ from functools import reduce
 from pathlib import Path
 from typing import Sequence
 
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.patches import Rectangle
 import pandas as pd
+import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = PROJECT_ROOT / "data" / "results"
 ARTIFACTS_DIR = PROJECT_ROOT / "data" / "artifacts"
 REPORTS_OVERALL_DIR = PROJECT_ROOT / "reports" / "overall"
+CONFIG_PATH = PROJECT_ROOT / "configs" / "config_overall.yaml"
 
 PHYSICAL_INPUT_DIR = RESULTS_ROOT / "physical_output"
 DEFAULT_OUTPUT = ARTIFACTS_DIR / "daily_median_metrics.xlsx"
 DEFAULT_HEATMAP_OUTPUT = REPORTS_OVERALL_DIR / "daily_median_metrics_heatmap.png"
+DEFAULT_FROZEN_NMAE_PDF = REPORTS_OVERALL_DIR / "daily_target_transfer_frozen_nmae.pdf"
+DEFAULT_FROZEN_NMAE_PNG = REPORTS_OVERALL_DIR / "daily_target_transfer_frozen_nmae.png"
+DEFAULT_FROZEN_NRMSE_SUPPLEMENTARY_PDF = REPORTS_OVERALL_DIR / "daily_target_transfer_frozen_nrmse_supplementary.pdf"
+DEFAULT_FROZEN_NRMSE_SUPPLEMENTARY_PNG = REPORTS_OVERALL_DIR / "daily_target_transfer_frozen_nrmse_supplementary.png"
 DEFAULT_START_DATE = "2025-07-07"
 HEATMAP_START_DATE = pd.Timestamp("2025-07-07").normalize()
 HEATMAP_END_DATE = pd.Timestamp("2025-10-05").normalize()  # day 91
 
 MODEL_ORDER = ["physical", "source", "target", "transfer"]
+FROZEN_START_TEST_DAY = 62
+FROZEN_END_TEST_DAY = 91
+LOWER_OUTPUT_REGIME_START_TEST_DAY = 78
+FROZEN_NMAE_CAPTION = (
+    "Daily realised PV energy and daily nMAE for the Target and Transfer models "
+    "during the 30-day frozen evaluation."
+)
 
 PHYS_TRUE_CANDS = ["Mittelwertleistung [W]", "mittelwertleistung [w]", "mean_power", "avg_power"]
 DIRECT_CANDS = ["aswdir_s"]
@@ -38,6 +52,20 @@ METRIC_SPECS = [
     ("target", ARTIFACTS_DIR / "target_model_testday_metrics.csv"),
     ("transfer", ARTIFACTS_DIR / "transfer_model_testday_metrics.csv"),
 ]
+
+
+def load_report_model_colors() -> dict[str, str]:
+    """Load the publication palette used by the frozen-phase overview."""
+    with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+        colors = yaml.safe_load(config_file).get("report_model_colors", {})
+    required = {"physical_model", "target_model", "transfer_model"}
+    missing = required - set(colors)
+    if missing:
+        raise KeyError(f"config_overall.yaml is missing report colors for: {sorted(missing)}")
+    return {key: str(colors[key]) for key in required}
+
+
+REPORT_MODEL_COLORS = load_report_model_colors()
 
 
 def _find_col(df: pd.DataFrame, candidates: Sequence[str]) -> str | None:
@@ -61,7 +89,7 @@ def _list_physical_exports(directory: Path) -> list[Path]:
     return exports
 
 
-def _load_physical_rows(path: Path) -> pd.DataFrame:
+def _load_physical_rows(path: Path, *, daylight_only: bool = True) -> pd.DataFrame:
     df = pd.read_csv(path)
     if "valid_time" not in df.columns:
         raise ValueError(f"Missing 'valid_time' in {path}.")
@@ -97,9 +125,19 @@ def _load_physical_rows(path: Path) -> pd.DataFrame:
         }
     )
     out = out.dropna(subset=["valid_time", "solar_elevation_deg"])
-    out = out[out["solar_elevation_deg"] > 0.0].copy()
+    if daylight_only:
+        out = out[out["solar_elevation_deg"] > 0.0].copy()
     out["date"] = out["valid_time"].dt.normalize()
-    return out[["date", "real_power_w", "direct_wm2", "diffuse_wm2", "temp_k"]]
+    return out[
+        [
+            "valid_time",
+            "date",
+            "real_power_w",
+            "direct_wm2",
+            "diffuse_wm2",
+            "temp_k",
+        ]
+    ]
 
 
 def build_daily_physical_medians(start_date: pd.Timestamp) -> pd.DataFrame:
@@ -125,6 +163,62 @@ def build_daily_physical_medians(start_date: pd.Timestamp) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     return daily
+
+
+def build_daily_realized_pv_energy(
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """Integrate one deduplicated real-PV series into daily energy in kWh.
+
+    Each physical NWP export carries the same measured PV values for overlapping
+    valid times.  The values are deduplicated by timestamp before integration;
+    differing duplicate values would indicate an inconsistent source and are
+    rejected instead of silently changing the weather indicator.
+    """
+    exports = _list_physical_exports(PHYSICAL_INPUT_DIR)
+    frames = [_load_physical_rows(fp, daylight_only=False) for fp in exports]
+    all_rows = pd.concat(frames, ignore_index=True)
+    all_rows = all_rows[all_rows["date"] >= start_date].copy()
+    if end_date is not None:
+        all_rows = all_rows[all_rows["date"] <= end_date.normalize()].copy()
+    if all_rows.empty:
+        raise RuntimeError(f"No physical PV rows on or after {start_date.date()}.")
+
+    by_timestamp = (
+        all_rows.groupby("valid_time", as_index=False)
+        .agg(
+            real_power_w=("real_power_w", "median"),
+            unique_real_power_values=("real_power_w", "nunique"),
+        )
+        .sort_values("valid_time")
+        .reset_index(drop=True)
+    )
+    if (by_timestamp["unique_real_power_values"] > 1).any():
+        conflicting = int((by_timestamp["unique_real_power_values"] > 1).sum())
+        raise ValueError(
+            f"Measured PV values differ across overlapping physical exports at {conflicting} timestamps."
+        )
+
+    by_timestamp["date"] = by_timestamp["valid_time"].dt.normalize()
+    daily = (
+        by_timestamp.groupby("date", as_index=False)
+        .agg(
+            realized_pv_energy_kwh=("real_power_w", lambda power: power.sum() * 0.25 / 1000.0),
+            quarter_hour_count=("valid_time", "size"),
+        )
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+    if (daily["quarter_hour_count"] != 96).any():
+        invalid_dates = daily.loc[
+            daily["quarter_hour_count"] != 96, ["date", "quarter_hour_count"]
+        ].to_dict("records")
+        raise ValueError(
+            "Daily realized-PV energy requires exactly 96 unique quarter-hours; "
+            f"invalid days: {invalid_dates}"
+        )
+    return daily[["date", "realized_pv_energy_kwh"]]
 
 
 def _load_model_metrics(path: Path, prefix: str, start_date: pd.Timestamp) -> pd.DataFrame:
@@ -431,6 +525,199 @@ def export_daily_metrics_heatmap(table: pd.DataFrame, output_path: Path) -> None
     plt.close(fig)
 
 
+def export_target_transfer_frozen_metric(
+    table: pd.DataFrame,
+    daily_pv_energy: pd.DataFrame,
+    *,
+    metric_name: str,
+    pdf_path: Path,
+    png_path: Path,
+) -> None:
+    """Export a two-panel frozen-phase PV-energy and metric figure."""
+    if metric_name not in {"nMAE", "nRMSE"}:
+        raise ValueError(f"Unsupported metric '{metric_name}'.")
+    required_metric_columns = {
+        "date",
+        "target_nMAE",
+        "transfer_nMAE",
+        "target_nRMSE",
+        "transfer_nRMSE",
+    }
+    missing_metrics = required_metric_columns - set(table.columns)
+    if missing_metrics:
+        raise KeyError(f"Missing chronological metric column(s): {sorted(missing_metrics)}")
+    required_energy_columns = {"date", "realized_pv_energy_kwh"}
+    missing_energy = required_energy_columns - set(daily_pv_energy.columns)
+    if missing_energy:
+        raise KeyError(f"Missing daily-energy column(s): {sorted(missing_energy)}")
+
+    metrics = table.loc[
+        :, ["date", "target_nMAE", "transfer_nMAE", "target_nRMSE", "transfer_nRMSE"]
+    ].copy()
+    metrics["date"] = pd.to_datetime(metrics["date"], errors="coerce").dt.normalize()
+    energy = daily_pv_energy.loc[:, ["date", "realized_pv_energy_kwh"]].copy()
+    energy["date"] = pd.to_datetime(energy["date"], errors="coerce").dt.normalize()
+    df = metrics.merge(energy, on="date", how="inner")
+    df["test_day"] = (df["date"] - HEATMAP_START_DATE).dt.days + 1
+    df = df[
+        df["test_day"].between(FROZEN_START_TEST_DAY, FROZEN_END_TEST_DAY)
+    ].copy()
+    df = df.sort_values("date").reset_index(drop=True)
+
+    expected_dates = pd.date_range(
+        HEATMAP_START_DATE + pd.Timedelta(days=FROZEN_START_TEST_DAY - 1),
+        HEATMAP_START_DATE + pd.Timedelta(days=FROZEN_END_TEST_DAY - 1),
+        freq="D",
+    )
+    if not df["date"].equals(pd.Series(expected_dates, name="date")):
+        raise RuntimeError("Frozen figure requires the complete chronological 30-day date axis.")
+    for column in [
+        "target_nMAE",
+        "transfer_nMAE",
+        "target_nRMSE",
+        "transfer_nRMSE",
+        "realized_pv_energy_kwh",
+    ]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    if df[
+        [
+            "target_nMAE",
+            "transfer_nMAE",
+            "target_nRMSE",
+            "transfer_nRMSE",
+            "realized_pv_energy_kwh",
+        ]
+    ].isna().any().any():
+        raise ValueError("Frozen figure contains missing metric or daily PV-energy values.")
+
+    dates = df["date"]
+    target_metric_percent = df[f"target_{metric_name}"] * 100.0
+    transfer_metric_percent = df[f"transfer_{metric_name}"] * 100.0
+    regime_start = HEATMAP_START_DATE + pd.Timedelta(
+        days=LOWER_OUTPUT_REGIME_START_TEST_DAY - 1.5
+    )
+    figure_end = HEATMAP_START_DATE + pd.Timedelta(days=FROZEN_END_TEST_DAY - 0.5)
+
+    fig, (ax_weather, ax_metric) = plt.subplots(
+        2,
+        1,
+        figsize=(3.45, 3.15),
+        sharex=True,
+        gridspec_kw={"height_ratios": [0.75, 2.0]},
+        constrained_layout=True,
+    )
+    # Extra outer padding plus a lower label centre prevent the long vertical
+    # PV-energy label from being clipped at the left or top edge.
+    fig.set_constrained_layout_pads(w_pad=0.08, h_pad=0.08, wspace=0.02, hspace=0.04)
+
+    for axis in (ax_weather, ax_metric):
+        axis.set_facecolor("white")
+        axis.axvspan(regime_start, figure_end, color="0.96", zorder=0)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.spines["left"].set_linewidth(0.8)
+        axis.spines["bottom"].set_linewidth(0.8)
+        axis.tick_params(axis="y", labelsize=7, width=0.8, length=3)
+
+    ax_weather.plot(
+        dates,
+        df["realized_pv_energy_kwh"],
+        color=REPORT_MODEL_COLORS["physical_model"],
+        linewidth=0.8,
+        marker="o",
+        markersize=3.0,
+        markerfacecolor="white",
+        markeredgecolor=REPORT_MODEL_COLORS["physical_model"],
+        markeredgewidth=0.7,
+        zorder=3,
+    )
+    ax_weather.set_ylabel("PV energy [kWh]", fontsize=8)
+    ax_weather.text(
+        regime_start + pd.Timedelta(days=0.45),
+        0.91,
+        "lower-output\nregime",
+        transform=ax_weather.get_xaxis_transform(),
+        ha="left",
+        va="top",
+        fontsize=7,
+        color="0.35",
+    )
+
+    ax_metric.plot(
+        dates,
+        target_metric_percent,
+        color=REPORT_MODEL_COLORS["target_model"],
+        linewidth=0.9,
+        marker="o",
+        markersize=3.7,
+        markerfacecolor="white",
+        markeredgecolor=REPORT_MODEL_COLORS["target_model"],
+        markeredgewidth=0.8,
+        label="Target",
+        zorder=4,
+    )
+    ax_metric.plot(
+        dates,
+        transfer_metric_percent,
+        color=REPORT_MODEL_COLORS["transfer_model"],
+        linestyle="--",
+        linewidth=0.9,
+        marker="s",
+        markersize=3.7,
+        markerfacecolor="white",
+        markeredgecolor=REPORT_MODEL_COLORS["transfer_model"],
+        markeredgewidth=0.8,
+        label="Transfer",
+        zorder=3,
+    )
+    ax_metric.set_ylabel(f"Daily {metric_name} [%]", fontsize=8)
+    # Explicit shared coordinates keep both vertical labels on one common line;
+    # no automatic label padding is used for their horizontal placement.
+    ylabel_x = -0.14
+    ax_weather.yaxis.set_label_coords(ylabel_x, 0.5)
+    ax_metric.yaxis.set_label_coords(ylabel_x, 0.5)
+    ax_metric.grid(axis="y", color="0.90", linewidth=0.5, zorder=0)
+    ax_metric.legend(
+        loc="upper left",
+        bbox_to_anchor=(0.0, 0.88),
+        frameon=False,
+        fontsize=7,
+        handlelength=1.35,
+        handletextpad=0.30,
+        labelspacing=0.20,
+        borderaxespad=0.0,
+    )
+
+    tick_indices = [0, 7, 14, 21, 29]
+    ax_metric.set_xlim(dates.iloc[0] - pd.Timedelta(days=0.5), figure_end)
+    ax_metric.set_xticks(dates.iloc[tick_indices])
+    ax_metric.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+    ax_metric.tick_params(axis="x", labelsize=7, width=0.8, length=3, pad=2)
+
+    # Keep the panel tags in a shared vertical column, immediately above each
+    # data area.  This makes them unambiguous without covering plotted values.
+    fig.canvas.draw()
+    panel_label_x = min(ax_weather.get_position().x0, ax_metric.get_position().x0)
+    for axis, panel_label in ((ax_weather, "(a)"), (ax_metric, "(b)")):
+        fig.text(
+            panel_label_x,
+            axis.get_position().y1 + 0.004,
+            panel_label,
+            ha="left",
+            va="bottom",
+            fontsize=8,
+            fontweight="bold",
+        )
+
+    for output_path, save_kwargs in (
+        (pdf_path, {"format": "pdf"}),
+        (png_path, {"dpi": 600}),
+    ):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, bbox_inches="tight", pad_inches=0.03, **save_kwargs)
+    plt.close(fig)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -461,12 +748,32 @@ def main(argv: list[str] | None = None) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     table.to_excel(output_path, index=False)
     export_daily_metrics_heatmap(table, DEFAULT_HEATMAP_OUTPUT)
+    daily_pv_energy = build_daily_realized_pv_energy(start_date, HEATMAP_END_DATE)
+    export_target_transfer_frozen_metric(
+        table,
+        daily_pv_energy,
+        metric_name="nMAE",
+        pdf_path=DEFAULT_FROZEN_NMAE_PDF,
+        png_path=DEFAULT_FROZEN_NMAE_PNG,
+    )
+    export_target_transfer_frozen_metric(
+        table,
+        daily_pv_energy,
+        metric_name="nRMSE",
+        pdf_path=DEFAULT_FROZEN_NRMSE_SUPPLEMENTARY_PDF,
+        png_path=DEFAULT_FROZEN_NRMSE_SUPPLEMENTARY_PNG,
+    )
 
     print(
         f"Saved daily table: {output_path} "
         f"(rows={len(table)}, range={table['date'].iloc[0]}..{table['date'].iloc[-1]})."
     )
     print(f"Saved daily metrics heatmap: {DEFAULT_HEATMAP_OUTPUT}")
+    print(f"Saved frozen nMAE PDF: {DEFAULT_FROZEN_NMAE_PDF}")
+    print(f"Saved frozen nMAE PNG: {DEFAULT_FROZEN_NMAE_PNG}")
+    print(f"Saved frozen supplementary nRMSE PDF: {DEFAULT_FROZEN_NRMSE_SUPPLEMENTARY_PDF}")
+    print(f"Saved frozen supplementary nRMSE PNG: {DEFAULT_FROZEN_NRMSE_SUPPLEMENTARY_PNG}")
+    print(f"Suggested main-figure caption: {FROZEN_NMAE_CAPTION}")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,15 @@ model_colors:
   target_model: "tab:red"
   standard_model: "tab:gray"
 
+# Publication palette for the model-specific elements in the selected overall
+# figures.  It is kept separate from ``model_colors`` so existing report plots
+# retain their established colours unless they explicitly opt into this scheme.
+report_model_colors:
+  physical_model: "#7F8790"
+  source_model: "#326C9D"
+  target_model: "#2F7F78"
+  transfer_model: "#6A4C93"
+
 models:
   - ["transfer_model_testday_metrics.csv", "Transfer Learning", "transfer_model"]
   - ["physical_model_testday_metrics.csv", "Physical Model", "physical_model"]

@@ -22,6 +22,7 @@ from optimization import (
     compute_dispatch_settlement,
     solve_milp_for_horizon,
 )
+from forecast_run_selection import DATE_END, DATE_START, PHYSICAL_FORECAST_FILES
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -34,10 +35,6 @@ OUTPUT_DISPATCH_PATH = OUTPUT_DIR / "optimization_dispatch_physical.csv"
 OUTPUT_SUMMARY_PATH = OUTPUT_DIR / "optimization_run_summary_physical.csv"
 
 SCENARIO_NAME = "physical"
-
-#dispatch days from 2025-07-08 to 2025-10-05, inclusive, total 90 days, with available forecast files for each day
-DATE_START = pd.Timestamp("2025-07-08")
-DATE_END = pd.Timestamp("2025-10-05")
 
 STEP_MINUTES = 15
 STEP = pd.Timedelta(minutes=STEP_MINUTES)
@@ -57,99 +54,7 @@ COL_FORECAST_PV = "pv_power_W"
 MODEL_COL_PV = "P_pv_forecast_W"
 SETTLEMENT_REBAP_COL = "reBAP_unterdeckt_eur_mwh"
 
-# zwei fallback files mit 09 uhr 1x und 6 uhr 1x, da 09 uhr files für 2025-08-23 und 2025-09-04 fehlen, siehe
-PHYSICAL_FORECAST_FILES = [
-    "pv_weather_2025070709_with_pv_power.csv",
-    "pv_weather_2025070809_with_pv_power.csv",
-    "pv_weather_2025070909_with_pv_power.csv",
-    "pv_weather_2025071009_with_pv_power.csv",
-    "pv_weather_2025071109_with_pv_power.csv",
-    "pv_weather_2025071209_with_pv_power.csv",
-    "pv_weather_2025071309_with_pv_power.csv",
-    "pv_weather_2025071409_with_pv_power.csv",
-    "pv_weather_2025071509_with_pv_power.csv",
-    "pv_weather_2025071609_with_pv_power.csv",
-    "pv_weather_2025071709_with_pv_power.csv",
-    "pv_weather_2025071809_with_pv_power.csv",
-    "pv_weather_2025071909_with_pv_power.csv",
-    "pv_weather_2025072009_with_pv_power.csv",
-    "pv_weather_2025072109_with_pv_power.csv",
-    "pv_weather_2025072209_with_pv_power.csv",
-    "pv_weather_2025072309_with_pv_power.csv",
-    "pv_weather_2025072409_with_pv_power.csv",
-    "pv_weather_2025072509_with_pv_power.csv",
-    "pv_weather_2025072609_with_pv_power.csv",
-    "pv_weather_2025072709_with_pv_power.csv",
-    "pv_weather_2025072809_with_pv_power.csv",
-    "pv_weather_2025072909_with_pv_power.csv",
-    "pv_weather_2025073009_with_pv_power.csv",
-    "pv_weather_2025073109_with_pv_power.csv",
-    "pv_weather_2025080109_with_pv_power.csv",
-    "pv_weather_2025080209_with_pv_power.csv",
-    "pv_weather_2025080309_with_pv_power.csv",
-    "pv_weather_2025080409_with_pv_power.csv",
-    "pv_weather_2025080509_with_pv_power.csv",
-    "pv_weather_2025080609_with_pv_power.csv",
-    "pv_weather_2025080709_with_pv_power.csv",
-    "pv_weather_2025080809_with_pv_power.csv",
-    "pv_weather_2025080909_with_pv_power.csv",
-    "pv_weather_2025081009_with_pv_power.csv",
-    "pv_weather_2025081109_with_pv_power.csv",
-    "pv_weather_2025081209_with_pv_power.csv",
-    "pv_weather_2025081309_with_pv_power.csv",
-    "pv_weather_2025081409_with_pv_power.csv",
-    "pv_weather_2025081509_with_pv_power.csv",
-    "pv_weather_2025081609_with_pv_power.csv",
-    "pv_weather_2025081709_with_pv_power.csv",
-    "pv_weather_2025081809_with_pv_power.csv",
-    "pv_weather_2025081909_with_pv_power.csv",
-    "pv_weather_2025082009_with_pv_power.csv",
-    "pv_weather_2025082109_with_pv_power.csv",
-    "pv_weather_2025082209_with_pv_power.csv",
-    "pv_weather_2025082306_with_pv_power.csv",
-    "pv_weather_2025082409_with_pv_power.csv",
-    "pv_weather_2025082509_with_pv_power.csv",
-    "pv_weather_2025082609_with_pv_power.csv",
-    "pv_weather_2025082709_with_pv_power.csv",
-    "pv_weather_2025082809_with_pv_power.csv",
-    "pv_weather_2025082909_with_pv_power.csv",
-    "pv_weather_2025083009_with_pv_power.csv",
-    "pv_weather_2025083109_with_pv_power.csv",
-    "pv_weather_2025090109_with_pv_power.csv",
-    "pv_weather_2025090209_with_pv_power.csv",
-    "pv_weather_2025090309_with_pv_power.csv",
-    "pv_weather_2025090400_with_pv_power.csv",
-    "pv_weather_2025090509_with_pv_power.csv",
-    "pv_weather_2025090609_with_pv_power.csv",
-    "pv_weather_2025090709_with_pv_power.csv",
-    "pv_weather_2025090809_with_pv_power.csv",
-    "pv_weather_2025090909_with_pv_power.csv",
-    "pv_weather_2025091009_with_pv_power.csv",
-    "pv_weather_2025091109_with_pv_power.csv",
-    "pv_weather_2025091209_with_pv_power.csv",
-    "pv_weather_2025091309_with_pv_power.csv",
-    "pv_weather_2025091409_with_pv_power.csv",
-    "pv_weather_2025091509_with_pv_power.csv",
-    "pv_weather_2025091609_with_pv_power.csv",
-    "pv_weather_2025091709_with_pv_power.csv",
-    "pv_weather_2025091809_with_pv_power.csv",
-    "pv_weather_2025091909_with_pv_power.csv",
-    "pv_weather_2025092009_with_pv_power.csv",
-    "pv_weather_2025092109_with_pv_power.csv",
-    "pv_weather_2025092209_with_pv_power.csv",
-    "pv_weather_2025092309_with_pv_power.csv",
-    "pv_weather_2025092409_with_pv_power.csv",
-    "pv_weather_2025092509_with_pv_power.csv",
-    "pv_weather_2025092609_with_pv_power.csv",
-    "pv_weather_2025092709_with_pv_power.csv",
-    "pv_weather_2025092809_with_pv_power.csv",
-    "pv_weather_2025092909_with_pv_power.csv",
-    "pv_weather_2025093009_with_pv_power.csv",
-    "pv_weather_2025100109_with_pv_power.csv",
-    "pv_weather_2025100209_with_pv_power.csv",
-    "pv_weather_2025100309_with_pv_power.csv",
-    "pv_weather_2025100409_with_pv_power.csv",
-]
+# The shared mapping includes the documented 06:00 and 00:00 fallback runs.
 
 
 def _to_numeric(series: pd.Series) -> pd.Series:
